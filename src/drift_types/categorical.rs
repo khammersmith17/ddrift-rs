@@ -1,0 +1,1115 @@
+use super::{
+    DecayModeMark, FlushModeMark, StreamingDataDriftMark, constants, stream_mode::StreamModeInner,
+};
+use crate::{
+    baseline::categorical::{BaselineCategoricalBins, NullableBaselineCategoricalBins},
+    core::bin_edges::CategoricalBinEdges,
+    core::{
+        compute_dataset_from_bins_categorical, compute_dataset_from_bins_categorical_parallel,
+        compute_dataset_from_nullable_bins_categorical,
+        drift_metrics::{DataDriftType, DriftContainer, DriftContainerType, global_compute_drift},
+        error::{DriftError, DriftExportError},
+    },
+    export,
+};
+use ahash::HashMap;
+use std::{
+    hash::Hash,
+    marker::PhantomData,
+    num::NonZeroU64,
+    time::{Duration, Instant},
+};
+
+pub struct NullableCategoricalDataDrift<T: Hash + Ord + Clone> {
+    pub(crate) baseline: NullableBaselineCategoricalBins<T>,
+    rt_bins: Vec<f64>,
+    n: f64,
+    null_n: f64,
+}
+
+impl<T: Hash + Ord + Clone> DriftContainer for NullableCategoricalDataDrift<T> {
+    fn get_baseline_hist(&self) -> &[f64] {
+        self.baseline.get_baseline_hist()
+    }
+
+    fn get_runtime_bins(&self) -> &[f64] {
+        &self.rt_bins
+    }
+
+    fn container_type(&self) -> DriftContainerType {
+        DriftContainerType::Categorical
+    }
+
+    fn num_examples(&self) -> f64 {
+        self.n - self.null_n
+    }
+}
+
+impl<T: Hash + Ord + Clone> NullableCategoricalDataDrift<T> {
+    /// Construct a new instance from a baseline dataset. The baseline is used to build a
+    /// label-frequency histogram with one bin per unique value, plus one reserved "other" bin
+    /// for values not present in the baseline.
+    ///
+    /// Returns [`DriftError::EmptyBaselineData`] if `baseline_data` is empty.
+    pub fn new(baseline_data: &[Option<T>]) -> Result<NullableCategoricalDataDrift<T>, DriftError> {
+        if baseline_data.is_empty() {
+            return Err(DriftError::EmptyBaselineData);
+        }
+
+        let baseline = NullableBaselineCategoricalBins::new(baseline_data)?;
+        let num_bins = baseline.baseline_bins.len();
+        let rt_bins: Vec<f64> = vec![0_f64; num_bins];
+
+        Ok(NullableCategoricalDataDrift {
+            baseline,
+            rt_bins,
+            n: 0_f64,
+            null_n: 0_f64,
+        })
+    }
+
+    pub fn compute_drift(
+        &mut self,
+        runtime_data: &[Option<T>],
+        drift_type: DataDriftType,
+    ) -> Result<(f64, f64), DriftError> {
+        self.build_rt_hist(runtime_data)?;
+        let drift = global_compute_drift(self, drift_type);
+        self.clear_rt();
+        Ok((drift, self.null_n / self.n))
+    }
+
+    pub fn compute_drift_multiple_criteria(
+        &mut self,
+        runtime_data: &[Option<T>],
+        drift_types: &[DataDriftType],
+    ) -> Result<(Vec<f64>, f64), DriftError> {
+        self.build_rt_hist(runtime_data)?;
+        let drift: Vec<f64> = drift_types
+            .iter()
+            .map(|t| global_compute_drift(self, *t))
+            .collect();
+        self.clear_rt();
+        Ok((drift, self.null_n / self.n))
+    }
+
+    fn build_rt_hist(&mut self, runtime_data: &[Option<T>]) -> Result<(), DriftError> {
+        if runtime_data.is_empty() {
+            return Err(DriftError::EmptyRuntimeData);
+        }
+        let edges = CategoricalBinEdges(&self.baseline.idx_map);
+        self.n = runtime_data.len() as f64;
+        (self.rt_bins, self.null_n) =
+            compute_dataset_from_nullable_bins_categorical(runtime_data, &edges);
+        Ok(())
+    }
+
+    fn clear_rt(&mut self) {
+        self.rt_bins.fill(0_f64);
+        self.n = 0_f64;
+        self.null_n = 0_f64;
+    }
+}
+
+/// Batch drift detector for categorical (label) features. Compares a provided runtime dataset
+/// against a fixed baseline distribution using a label-frequency histogram.
+///
+/// The baseline histogram is built once at construction and held until [`reset_baseline`] is
+/// called. Runtime data is binned on each call to [`compute_drift`] and discarded immediately
+/// after — no state is accumulated between calls.
+///
+/// # Bin count
+///
+/// The number of bins equals the number of unique values observed in the baseline dataset plus
+/// one additional "other" bucket. Any runtime value not present in the baseline is routed to
+/// this "other" bin rather than being silently ignored, so novel categories are always reflected
+/// in the drift signal.
+///
+/// # Type bounds
+///
+/// `T` must implement [`Hash`], [`Ord`], and [`Clone`]. In practice `T` is typically `String` or
+/// `&str`, but any hashable, ordered label type works (e.g. an enum that derives those traits).
+///
+/// [`reset_baseline`]: CategoricalDataDrift::reset_baseline
+/// [`compute_drift`]: CategoricalDataDrift::compute_drift
+// store bins as vec for better performance on psi computation and bin accumulation
+// store cat label to index in map
+pub struct CategoricalDataDrift<T: Hash + Ord + Clone> {
+    pub(crate) baseline: BaselineCategoricalBins<T>,
+    rt_bins: Vec<f64>,
+}
+
+impl<T: Hash + Ord + Clone> DriftContainer for CategoricalDataDrift<T> {
+    fn get_baseline_hist(&self) -> &[f64] {
+        &self.baseline.baseline_bins
+    }
+
+    fn get_runtime_bins(&self) -> &[f64] {
+        &self.rt_bins
+    }
+
+    fn num_examples(&self) -> f64 {
+        self.rt_bins.iter().sum()
+    }
+
+    fn container_type(&self) -> DriftContainerType {
+        DriftContainerType::Categorical
+    }
+}
+
+impl<T: Hash + Ord + Clone + serde::de::DeserializeOwned> CategoricalDataDrift<T> {
+    pub fn new_from_export(
+        export: export::CategoricalDriftBaselineExport,
+    ) -> Result<CategoricalDataDrift<T>, DriftExportError> {
+        let baseline: BaselineCategoricalBins<T> = BaselineCategoricalBins::try_from(export)?;
+        let rt_bins = vec![0_f64; baseline.n_bins()];
+        Ok(CategoricalDataDrift { baseline, rt_bins })
+    }
+}
+
+impl<T: Hash + Ord + Clone + Sync> CategoricalDataDrift<T> {
+    /// Construct a new instance from a baseline dataset. The baseline is used to build a
+    /// label-frequency histogram with one bin per unique value, plus one reserved "other" bin
+    /// for values not present in the baseline. This method requires a T that is Sync, thus
+    /// the seperate method surface from the base method.
+    ///
+    /// Returns [`DriftError::EmptyBaselineData`] if `baseline_data` is empty.
+    pub fn new_par(baseline_data: &[T]) -> Result<CategoricalDataDrift<T>, DriftError> {
+        if baseline_data.is_empty() {
+            return Err(DriftError::EmptyBaselineData);
+        }
+
+        let baseline = BaselineCategoricalBins::new(baseline_data)?;
+        let num_bins = baseline.baseline_bins.len();
+        let rt_bins: Vec<f64> = vec![0_f64; num_bins];
+
+        Ok(CategoricalDataDrift { baseline, rt_bins })
+    }
+
+    fn build_rt_hist_parallel(&mut self, runtime_data: &[T]) -> Result<(), DriftError> {
+        if runtime_data.is_empty() {
+            return Err(DriftError::EmptyRuntimeData);
+        }
+        let edges = CategoricalBinEdges(&self.baseline.idx_map);
+        self.rt_bins = compute_dataset_from_bins_categorical_parallel(runtime_data, &edges);
+
+        Ok(())
+    }
+
+    /// Compute drift between the baseline and the provided runtime dataset. This method uses the
+    /// internal implementation to compute the runtime dataset distribution, and thus requires T to
+    /// be sync. If T is not Sync, then the base method can be used. The runtime data is
+    /// binned against the baseline label map, drift is computed, and the runtime bins are
+    /// cleared. Each call is stateless with respect to prior runtime data.
+    ///
+    /// To compute drift across multiple criteria, use [`CategoricalDataDrift::compute_drift_multiple_criteria`]
+    ///
+    /// Runtime labels not seen in the baseline are accumulated in the "other" bin.
+    ///
+    /// Returns [`DriftError::EmptyRuntimeData`] if `runtime_data` is empty.
+    pub fn compute_drift_par(
+        &mut self,
+        runtime_data: &[T],
+        drift_type: DataDriftType,
+    ) -> Result<f64, DriftError> {
+        self.build_rt_hist_parallel(runtime_data)?;
+        let drift = global_compute_drift(self, drift_type);
+        self.clear_rt();
+        Ok(drift)
+    }
+
+    /// Compute drift between the baseline and the provided runtime dataset for multiple drift
+    /// metric types, leveraging the multiple threads to derive the runtime dataset distribution.
+    /// The runtime data is binned against the baseline label map, drift is computed, and the
+    /// runtime bins are cleared. Each call is stateless with respect to prior runtime data.
+    ///
+    /// This method is much more efficient for computing drift across multiple criteria as it only
+    /// requires a single build of the runtime data distribution representation.
+    ///
+    /// Runtime labels not seen in the baseline are accumulated in the "other" bin.
+    ///
+    /// Returns [`DriftError::EmptyRuntimeData`] if `runtime_data` is empty.
+    pub fn compute_drift_multiple_criteria_par(
+        &mut self,
+        runtime_data: &[T],
+        drift_types: &[DataDriftType],
+    ) -> Result<Vec<f64>, DriftError> {
+        self.build_rt_hist_parallel(runtime_data)?;
+        let drift = drift_types
+            .iter()
+            .map(|drift_type| global_compute_drift(self, *drift_type))
+            .collect();
+        self.clear_rt();
+        Ok(drift)
+    }
+}
+
+impl<T: Hash + Ord + Clone> CategoricalDataDrift<T> {
+    /// Construct a new instance from a baseline dataset. The baseline is used to build a
+    /// label-frequency histogram with one bin per unique value, plus one reserved "other" bin
+    /// for values not present in the baseline.
+    ///
+    /// Returns [`DriftError::EmptyBaselineData`] if `baseline_data` is empty.
+    pub fn new(baseline_data: &[T]) -> Result<CategoricalDataDrift<T>, DriftError> {
+        if baseline_data.is_empty() {
+            return Err(DriftError::EmptyBaselineData);
+        }
+
+        let baseline = BaselineCategoricalBins::new(baseline_data)?;
+        let num_bins = baseline.baseline_bins.len();
+        let rt_bins: Vec<f64> = vec![0_f64; num_bins];
+
+        Ok(CategoricalDataDrift { baseline, rt_bins })
+    }
+
+    /// Compute drift between the baseline and the provided runtime dataset. The runtime data is
+    /// binned against the baseline label map, drift is computed, and the runtime bins are
+    /// cleared. Each call is stateless with respect to prior runtime data.
+    ///
+    /// To compute drift across multiple criteria, use [`CategoricalDataDrift::compute_drift_multiple_criteria`]
+    ///
+    /// Runtime labels not seen in the baseline are accumulated in the "other" bin.
+    ///
+    /// Returns [`DriftError::EmptyRuntimeData`] if `runtime_data` is empty.
+    pub fn compute_drift(
+        &mut self,
+        runtime_data: &[T],
+        drift_type: DataDriftType,
+    ) -> Result<f64, DriftError> {
+        self.build_rt_hist(runtime_data)?;
+        let drift = global_compute_drift(self, drift_type);
+        self.clear_rt();
+        Ok(drift)
+    }
+
+    /// Compute drift between the baseline and the provided runtime dataset for multiple drift
+    /// metric types. The runtime data is binned against the baseline label map, drift is computed,
+    /// and the runtime bins are cleared. Each call is stateless with respect to prior runtime data.
+    ///
+    /// This method is much more efficient for computing drift across multiple criteria as it only
+    /// requires a single build of the runtime data distribution representation.
+    ///
+    /// Runtime labels not seen in the baseline are accumulated in the "other" bin.
+    ///
+    /// Returns [`DriftError::EmptyRuntimeData`] if `runtime_data` is empty.
+    pub fn compute_drift_multiple_criteria(
+        &mut self,
+        runtime_data: &[T],
+        drift_types: &[DataDriftType],
+    ) -> Result<Vec<f64>, DriftError> {
+        self.build_rt_hist(runtime_data)?;
+        let drift = drift_types
+            .iter()
+            .map(|drift_type| global_compute_drift(self, *drift_type))
+            .collect();
+        self.clear_rt();
+        Ok(drift)
+    }
+
+    fn build_rt_hist(&mut self, runtime_data: &[T]) -> Result<(), DriftError> {
+        if runtime_data.is_empty() {
+            return Err(DriftError::EmptyRuntimeData);
+        }
+        let edges = CategoricalBinEdges(&self.baseline.idx_map);
+        self.rt_bins = compute_dataset_from_bins_categorical(runtime_data, &edges);
+        Ok(())
+    }
+
+    fn clear_rt(&mut self) {
+        self.rt_bins.fill(0_f64);
+    }
+
+    /// Replace the baseline with a new dataset. The bin count is recomputed from the new data —
+    /// the number of bins becomes the new cardinality plus one "other" bin. Any previously
+    /// accumulated runtime bins are reset to zero.
+    ///
+    /// Returns [`DriftError::EmptyBaselineData`] if `new_baseline` is empty.
+    pub fn reset_baseline(&mut self, new_baseline: &[T]) -> Result<(), DriftError> {
+        self.baseline.reset(new_baseline)?;
+        let num_bins = self.baseline.baseline_bins.len();
+
+        // pay the cost to reallocate bins in order to have correct size
+        // not common path
+        self.rt_bins = vec![0_f64; num_bins];
+        Ok(())
+    }
+
+    /// Export the baseline label proportions as a map from label to proportion. Each value
+    /// represents the fraction of baseline samples with that label.
+    pub fn export_baseline(&self) -> HashMap<T, f64> {
+        self.baseline.export_baseline()
+    }
+
+    pub fn num_bins(&self) -> usize {
+        self.rt_bins.len()
+    }
+}
+
+impl<T: Hash + Ord + Clone + serde::Serialize> CategoricalDataDrift<T> {
+    pub fn export_baseline_state(
+        self,
+    ) -> Result<export::CategoricalDriftBaselineExport, serde_json::Error> {
+        self.baseline.try_into()
+    }
+}
+
+/// Streaming drift detector for categorical (label) features. Maintains a running histogram of
+/// observed runtime labels that is compared against a fixed baseline distribution.
+///
+/// The type parameter `M` controls the window management strategy and is set at construction:
+///
+/// - [`FlushModeMark`]: accumulates data until a sample count or time cadence threshold is
+///   reached, then hard-resets the stream window. Exposes [`flush`] and [`last_flush`].
+/// - [`DecayModeMark`]: applies exponential decay α = 0.5^(1/half_life) to all bin counts on
+///   each [`compute_drift`] call, giving a recency-weighted distribution with no hard cutoff.
+///   Does not expose [`flush`] or [`last_flush`].
+///
+/// # Bin count
+///
+/// The number of bins equals the cardinality of the baseline dataset plus one "other" bin for
+/// labels not observed at baseline time. Novel runtime labels are always captured in the signal.
+///
+/// # Type bounds
+///
+/// `T` must implement [`Hash`], [`Ord`], and [`Clone`]. Typically `String` or `&str`, but any
+/// hashable, ordered label type works.
+///
+/// [`flush`]: StreamingCategoricalDataDrift::flush
+/// [`last_flush`]: StreamingCategoricalDataDrift::last_flush
+/// [`compute_drift`]: StreamingCategoricalDataDrift::compute_drift
+pub struct StreamingCategoricalDataDrift<T: Hash + Ord + Clone, M> {
+    baseline: BaselineCategoricalBins<T>,
+    stream_bins: Vec<f64>,
+    total_stream_size: f64,
+    mode: StreamModeInner,
+    _mark: PhantomData<M>,
+}
+
+impl<T: Hash + Ord + Clone, M> DriftContainer for StreamingCategoricalDataDrift<T, M> {
+    fn get_baseline_hist(&self) -> &[f64] {
+        &self.baseline.baseline_bins
+    }
+
+    fn get_runtime_bins(&self) -> &[f64] {
+        &self.stream_bins
+    }
+
+    fn num_examples(&self) -> f64 {
+        self.total_stream_size
+    }
+
+    fn container_type(&self) -> DriftContainerType {
+        DriftContainerType::Categorical
+    }
+}
+
+impl<T: Hash + Ord + Clone> StreamingCategoricalDataDrift<T, FlushModeMark> {
+    /// Construct a flush-mode stream. The stream accumulates data until either `flush_size_opt`
+    /// samples have been observed or `flush_cadence_opt` has elapsed since the last flush —
+    /// whichever is reached first — at which point all accumulated runtime data is cleared and
+    /// the window restarts fresh.
+    ///
+    /// `flush_size_opt`: number of accumulated samples that triggers an automatic flush. A lower
+    /// value means more frequent resets and a more responsive signal, but each window contains
+    /// fewer samples making the drift estimate noisier. Defaults to 1,000,000.
+    ///
+    /// `flush_cadence_opt`: time elapsed since the last flush that triggers an automatic flush,
+    /// regardless of sample count. The time check is amortized over batches of 256 pushes to
+    /// avoid reading the clock on every sample. Defaults to 86,400 seconds (24 hours).
+    ///
+    /// Returns [`DriftError::EmptyBaselineData`] if `baseline_data` is empty.
+    pub fn new_flush(
+        baseline_data: &[T],
+        flush_size_opt: Option<u64>,
+        flush_cadence_opt: Option<Duration>,
+    ) -> Result<StreamingCategoricalDataDrift<T, FlushModeMark>, DriftError> {
+        let baseline = BaselineCategoricalBins::new(baseline_data)?;
+        let bl_hist_len = baseline.baseline_bins.len();
+        let stream_bins: Vec<f64> = vec![0_f64; bl_hist_len];
+        let size = flush_size_opt.unwrap_or(constants::DEFAULT_MAX_STREAM_SIZE);
+        let cadence =
+            flush_cadence_opt.unwrap_or(Duration::new(constants::DEFAULT_STREAM_FLUSH_CADENCE, 0));
+        let mode = StreamModeInner::Flush {
+            size: size as f64,
+            cadence,
+            last_flush_ts: Instant::now(),
+        };
+
+        Ok(StreamingCategoricalDataDrift {
+            stream_bins,
+            baseline,
+            total_stream_size: 0_f64,
+            mode,
+            _mark: PhantomData,
+        })
+    }
+
+    /// Compute drift between the accumulated stream and the baseline.
+    ///
+    /// To compute multiple metrics on the same accumulated state, use
+    /// [`compute_drift_multiple_criteria`] instead.
+    ///
+    /// Returns [`DriftError::EmptyRuntimeData`] if no data has been accumulated since the last
+    /// flush.
+    ///
+    /// [`compute_drift_multiple_criteria`]: StreamingCategoricalDataDrift::compute_drift_multiple_criteria
+    pub fn compute_drift(&mut self, drift_type: DataDriftType) -> Result<f64, DriftError> {
+        if self.is_empty() {
+            return Err(DriftError::EmptyRuntimeData);
+        }
+        Ok(global_compute_drift(self, drift_type))
+    }
+
+    /// Compute multiple drift metrics against the accumulated stream in a single call. Prefer
+    /// this over calling [`compute_drift`] in a loop when multiple metrics are needed
+    /// simultaneously.
+    ///
+    /// Returns [`DriftError::EmptyRuntimeData`] if no data has been accumulated since the last
+    /// flush.
+    ///
+    /// [`compute_drift`]: StreamingCategoricalDataDrift::compute_drift
+    pub fn compute_drift_multiple_criteria(
+        &mut self,
+        drift_types: &[DataDriftType],
+    ) -> Result<Vec<f64>, DriftError> {
+        if self.is_empty() {
+            return Err(DriftError::EmptyRuntimeData);
+        }
+        Ok(drift_types
+            .iter()
+            .map(|drift_t| global_compute_drift(self, *drift_t))
+            .collect())
+    }
+
+    /// Push a single label into the stream. A flush is triggered before the item is recorded
+    /// if the flush size or cadence threshold has been reached, starting a fresh window.
+    #[inline]
+    pub fn update_stream(&mut self, item: &T) {
+        let idx = self.baseline.resolve_bin(item);
+        if self.mode.needs_flush(self.total_stream_size) {
+            self.flush();
+        }
+        self.stream_bins[idx] += 1_f64;
+        self.total_stream_size += 1_f64;
+    }
+
+    /// Push a batch of labels into the stream. Each item is checked against flush thresholds
+    /// individually, so a flush may occur mid-batch if the size threshold is crossed.
+    ///
+    /// Returns [`DriftError::EmptyRuntimeData`] if the slice is empty.
+    pub fn update_stream_batch(&mut self, runtime_data: &[T]) -> Result<(), DriftError> {
+        if runtime_data.is_empty() {
+            return Err(DriftError::EmptyRuntimeData);
+        }
+        runtime_data.iter().for_each(|cat| self.update_stream(cat));
+
+        Ok(())
+    }
+
+    /// Manually flush the stream, clearing all accumulated runtime data. The baseline is not
+    /// affected. The flush timestamp is reset so the cadence timer restarts from this point.
+    pub fn flush(&mut self) {
+        self.flush_runtime_stream();
+        self.mode.perform_flush();
+    }
+}
+
+impl<T: Hash + Ord + Clone + serde::de::DeserializeOwned>
+    StreamingCategoricalDataDrift<T, FlushModeMark>
+{
+    pub fn new_from_base_export(
+        export: export::StreamingCategoricalBaseExport,
+    ) -> Result<StreamingCategoricalDataDrift<T, FlushModeMark>, DriftExportError> {
+        let export::StreamingCategoricalBaseExport {
+            baseline: baseline_export,
+            stream_mode,
+        } = export;
+        let mode: StreamModeInner = stream_mode.into();
+        let baseline = BaselineCategoricalBins::new_from_export(baseline_export)?;
+
+        if matches!(mode, StreamModeInner::ExponentialDecay(_)) {
+            return Err(DriftExportError::InvalidDriftMode);
+        }
+        let n_bins = baseline.n_bins();
+        Ok(StreamingCategoricalDataDrift {
+            baseline,
+            stream_bins: vec![0_f64; n_bins],
+            total_stream_size: 0_f64,
+            mode,
+            _mark: PhantomData,
+        })
+    }
+
+    pub fn new_from_stateful_export(
+        export: export::StreamingCategoricalStatefulExport,
+    ) -> Result<StreamingCategoricalDataDrift<T, FlushModeMark>, DriftExportError> {
+        let export::StreamingCategoricalStatefulExport {
+            baseline: baseline_export,
+            stream_mode,
+            stream_bins,
+        } = export;
+        let mode: StreamModeInner = stream_mode.into();
+        let baseline = BaselineCategoricalBins::new_from_export(baseline_export)?;
+
+        if matches!(mode, StreamModeInner::ExponentialDecay(_)) {
+            return Err(DriftExportError::InvalidDriftMode);
+        }
+        Ok(StreamingCategoricalDataDrift {
+            baseline,
+            stream_bins,
+            total_stream_size: 0_f64,
+            mode,
+            _mark: PhantomData,
+        })
+    }
+}
+
+impl<T: Hash + Ord + Clone + serde::Serialize> StreamingCategoricalDataDrift<T, FlushModeMark> {
+    pub fn export_baseline_state(
+        self,
+    ) -> Result<export::StreamingCategoricalBaseExport, serde_json::Error> {
+        let baseline: export::CategoricalDriftBaselineExport = self.baseline.try_into()?;
+        Ok(export::StreamingCategoricalBaseExport {
+            baseline,
+            stream_mode: self.mode.into(),
+        })
+    }
+
+    pub fn export_stream_state(
+        self,
+    ) -> Result<export::StreamingCategoricalStatefulExport, serde_json::Error> {
+        let baseline: export::CategoricalDriftBaselineExport = self.baseline.try_into()?;
+        Ok(export::StreamingCategoricalStatefulExport {
+            baseline,
+            stream_bins: self.stream_bins,
+            stream_mode: self.mode.into(),
+        })
+    }
+}
+
+impl<T: Hash + Ord + Clone + serde::de::DeserializeOwned>
+    StreamingCategoricalDataDrift<T, DecayModeMark>
+{
+    pub fn new_from_base_export(
+        export: export::StreamingCategoricalBaseExport,
+    ) -> Result<StreamingCategoricalDataDrift<T, DecayModeMark>, DriftExportError> {
+        let export::StreamingCategoricalBaseExport {
+            baseline: baseline_export,
+            stream_mode,
+        } = export;
+        let mode: StreamModeInner = stream_mode.into();
+        let baseline = BaselineCategoricalBins::new_from_export(baseline_export)?;
+
+        if matches!(mode, StreamModeInner::Flush { .. }) {
+            return Err(DriftExportError::InvalidDriftMode);
+        }
+        let n_bins = baseline.n_bins();
+        Ok(StreamingCategoricalDataDrift {
+            baseline,
+            stream_bins: vec![0_f64; n_bins],
+            total_stream_size: 0_f64,
+            mode,
+            _mark: PhantomData,
+        })
+    }
+
+    pub fn new_from_stateful_export(
+        export: export::StreamingCategoricalStatefulExport,
+    ) -> Result<StreamingCategoricalDataDrift<T, DecayModeMark>, DriftExportError> {
+        let export::StreamingCategoricalStatefulExport {
+            baseline: baseline_export,
+            stream_mode,
+            stream_bins,
+        } = export;
+        let mode: StreamModeInner = stream_mode.into();
+        let baseline = BaselineCategoricalBins::new_from_export(baseline_export)?;
+
+        if matches!(mode, StreamModeInner::Flush { .. }) {
+            return Err(DriftExportError::InvalidDriftMode);
+        }
+        Ok(StreamingCategoricalDataDrift {
+            baseline,
+            stream_bins,
+            total_stream_size: 0_f64,
+            mode,
+            _mark: PhantomData,
+        })
+    }
+}
+
+impl<T: Hash + Ord + Clone + serde::Serialize> StreamingCategoricalDataDrift<T, DecayModeMark> {
+    pub fn export_baseline_state(
+        self,
+    ) -> Result<export::StreamingCategoricalBaseExport, serde_json::Error> {
+        let baseline: export::CategoricalDriftBaselineExport = self.baseline.try_into()?;
+        Ok(export::StreamingCategoricalBaseExport {
+            baseline,
+            stream_mode: self.mode.into(),
+        })
+    }
+
+    pub fn export_stream_state(
+        self,
+    ) -> Result<export::StreamingCategoricalStatefulExport, serde_json::Error> {
+        let baseline: export::CategoricalDriftBaselineExport = self.baseline.try_into()?;
+        Ok(export::StreamingCategoricalStatefulExport {
+            baseline,
+            stream_bins: self.stream_bins,
+            stream_mode: self.mode.into(),
+        })
+    }
+}
+
+impl<T: Hash + Ord + Clone> StreamingCategoricalDataDrift<T, DecayModeMark> {
+    /// Construct a decay-mode stream. On each [`compute_drift`] or
+    /// [`compute_drift_multiple_criteria`] call, all bin counts and `total_stream_size` are
+    /// multiplied by α = 0.5^(1/`half_life`), where `half_life` is the number of seconds after
+    /// which a sample's weight is halved. Older data is continuously down-weighted rather than
+    /// discarded, giving a recency-weighted view of the distribution with no hard resets.
+    ///
+    /// `half_life_opt`: decay half-life in seconds. A shorter half-life makes the signal more
+    /// sensitive to recent shifts at the cost of higher variance — older data loses influence
+    /// quickly. A longer half-life produces a smoother, more stable signal that responds slowly
+    /// to new patterns. Defaults to 86,400 (24 hours), meaning a sample's contribution is halved
+    /// after 24 hours worth of [`compute_drift`] calls.
+    ///
+    /// When computing multiple drift metrics on the same accumulated state, use
+    /// [`compute_drift_multiple_criteria`] — decay is applied once before all metrics are
+    /// evaluated. Calling [`compute_drift`] in a loop applies decay on each call.
+    ///
+    /// Returns [`DriftError::EmptyBaselineData`] if `baseline_data` is empty.
+    ///
+    /// [`compute_drift`]: StreamingCategoricalDataDrift::compute_drift
+    /// [`compute_drift_multiple_criteria`]: StreamingCategoricalDataDrift::compute_drift_multiple_criteria
+    pub fn new_decay(
+        baseline_data: &[T],
+        half_life_opt: Option<NonZeroU64>,
+    ) -> Result<StreamingCategoricalDataDrift<T, DecayModeMark>, DriftError> {
+        let baseline = BaselineCategoricalBins::new(baseline_data)?;
+        let bl_hist_len = baseline.baseline_bins.len();
+        let stream_bins: Vec<f64> = vec![0_f64; bl_hist_len];
+        let half_life =
+            half_life_opt.unwrap_or(NonZeroU64::new(constants::DEFAULT_DECAY_HALF_LIFE).unwrap());
+        let mode = StreamModeInner::ExponentialDecay(0.5_f64.powf(1_f64 / half_life.get() as f64));
+
+        Ok(StreamingCategoricalDataDrift {
+            stream_bins,
+            baseline,
+            total_stream_size: 0_f64,
+            mode,
+            _mark: PhantomData,
+        })
+    }
+
+    /// Compute drift between the accumulated stream and the baseline. Applies exponential decay
+    /// to all bin counts before computing, down-weighting older data by α = 0.5^(1/half_life).
+    ///
+    /// To compute multiple metrics on the same decayed state, use
+    /// [`compute_drift_multiple_criteria`] instead. Each call to this method applies decay once,
+    /// so calling it repeatedly for different metrics will compound the decay.
+    ///
+    /// Returns [`DriftError::EmptyRuntimeData`] if no data has been accumulated.
+    ///
+    /// [`compute_drift_multiple_criteria`]: StreamingCategoricalDataDrift::compute_drift_multiple_criteria
+    pub fn compute_drift(&mut self, drift_type: DataDriftType) -> Result<f64, DriftError> {
+        if self.is_empty() {
+            return Err(DriftError::EmptyRuntimeData);
+        }
+        self.apply_decay();
+        Ok(global_compute_drift(self, drift_type))
+    }
+
+    /// Compute multiple drift metrics against the accumulated stream in a single call. Decay is
+    /// applied once before all metrics are evaluated, ensuring all results reflect the same
+    /// decayed state. Prefer this over calling [`compute_drift`] in a loop when multiple metrics
+    /// are needed simultaneously.
+    ///
+    /// Returns [`DriftError::EmptyRuntimeData`] if no data has been accumulated.
+    ///
+    /// [`compute_drift`]: StreamingCategoricalDataDrift::compute_drift
+    pub fn compute_drift_multiple_criteria(
+        &mut self,
+        drift_types: &[DataDriftType],
+    ) -> Result<Vec<f64>, DriftError> {
+        if self.is_empty() {
+            return Err(DriftError::EmptyRuntimeData);
+        }
+        self.apply_decay();
+        Ok(drift_types
+            .iter()
+            .map(|drift_t| global_compute_drift(self, *drift_t))
+            .collect())
+    }
+
+    fn apply_decay(&mut self) {
+        let StreamModeInner::ExponentialDecay(decay_factor) = self.mode else {
+            unreachable!()
+        };
+        for bin in self.stream_bins.iter_mut() {
+            *bin = (*bin * decay_factor).floor();
+        }
+        self.total_stream_size = (self.total_stream_size * decay_factor).floor();
+    }
+
+    /// Push a single label into the stream.
+    #[inline]
+    pub fn update_stream(&mut self, item: &T) {
+        let idx = self.baseline.resolve_bin(item);
+        self.stream_bins[idx] += 1_f64;
+        self.total_stream_size += 1_f64;
+    }
+
+    /// Push a batch of labels into the stream.
+    ///
+    /// Returns [`DriftError::EmptyRuntimeData`] if the slice is empty.
+    pub fn update_stream_batch(&mut self, runtime_data: &[T]) -> Result<(), DriftError> {
+        if runtime_data.is_empty() {
+            return Err(DriftError::EmptyRuntimeData);
+        }
+        runtime_data.iter().for_each(|cat| self.update_stream(cat));
+
+        Ok(())
+    }
+}
+
+#[allow(private_bounds)]
+impl<T: Hash + Ord + Clone, M: StreamingDataDriftMark> StreamingCategoricalDataDrift<T, M> {
+    /// Returns `true` if no data has been accumulated since construction or the last flush.
+    pub fn is_empty(&self) -> bool {
+        self.stream_bins.iter().sum::<f64>() == 0_f64
+    }
+
+    /// Replace the baseline with a new dataset. The bin count is recomputed from the new data —
+    /// the number of bins becomes the new cardinality plus one "other" bin. All accumulated
+    /// stream data is cleared and the flush timestamp is reset.
+    ///
+    /// Returns [`DriftError::EmptyBaselineData`] if `new_baseline` is empty.
+    pub fn reset_baseline(&mut self, new_baseline: &[T]) -> Result<(), DriftError> {
+        self.baseline.reset(new_baseline)?;
+        self.mode.perform_flush();
+        self.init_stream_bins();
+        self.total_stream_size = 0_f64;
+        Ok(())
+    }
+
+    /// The number of samples accumulated in the stream since the last flush. In decay mode this
+    /// reflects the effective (decayed) sample count rather than the raw push count.
+    pub fn total_samples(&self) -> usize {
+        self.total_stream_size.floor() as usize
+    }
+
+    /// Returns the number of seconds elapsed since the last flush. Returns `0` in decay mode
+    /// as flush semantics do not apply.
+    pub fn last_flush(&self) -> u64 {
+        self.mode.last_flush()
+    }
+
+    /// Export a point-in-time snapshot of the stream as a map from label to raw (un-normalized)
+    /// bin count. The "other" bin for unseen labels is not included in the returned map.
+    ///
+    /// To compute proportional distributions, divide each value by [`total_samples`].
+    ///
+    /// [`total_samples`]: StreamingCategoricalDataDrift::total_samples
+    pub fn export_snapshot(&self) -> HashMap<T, f64> {
+        self.baseline
+            .idx_map
+            .iter()
+            .map(|(feat_name, i)| (feat_name.clone(), self.stream_bins[*i]))
+            .collect()
+    }
+
+    /// Export the baseline label proportions as a map from label to proportion. Each value
+    /// represents the fraction of baseline samples with that label.
+    pub fn export_baseline(&self) -> HashMap<T, f64> {
+        self.baseline.export_baseline()
+    }
+
+    fn init_stream_bins(&mut self) {
+        self.stream_bins = vec![0_f64; self.baseline.baseline_bins.len()]
+    }
+
+    fn flush_runtime_stream(&mut self) {
+        self.stream_bins.fill(0_f64);
+        self.total_stream_size = 0_f64;
+    }
+
+    pub fn num_bins(&self) -> usize {
+        self.stream_bins.len()
+    }
+}
+
+#[cfg(test)]
+mod categorical_tests {
+    use super::*;
+
+    #[test]
+    fn test_categorical_baseline_builds_expected_size() {
+        let baseline = ["a", "b", "a", "c"];
+        let psi = CategoricalDataDrift::new(&baseline).unwrap();
+
+        // baseline has 3 real labels + OTHER bucket
+        assert_eq!(psi.baseline.baseline_bins.len(), 4);
+    }
+
+    #[test]
+    fn test_categorical_psi_zero_when_no_drift() {
+        let baseline = ["a", "b", "a", "c"];
+        let mut psi = CategoricalDataDrift::new(&baseline).unwrap();
+        let runtime = ["a", "b", "a", "c"];
+        let drift = psi
+            .compute_drift(&runtime, DataDriftType::PopulationStabilityIndex)
+            .unwrap();
+        assert!(drift.abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_categorical_psi_detects_shift() {
+        let baseline = ["a", "b", "a", "c"];
+        let mut psi = CategoricalDataDrift::new(&baseline).unwrap();
+        let runtime = ["x", "x", "x", "x"]; // go to other bucket
+        let drift = psi
+            .compute_drift(&runtime, DataDriftType::PopulationStabilityIndex)
+            .unwrap();
+        assert!(drift > 0.5);
+    }
+
+    #[test]
+    fn test_streaming_categorical_accumulation() {
+        let baseline = ["a", "b"];
+        let mut streaming =
+            StreamingCategoricalDataDrift::new_flush(&baseline, None, None).unwrap();
+
+        streaming.update_stream_batch(&["a", "b"]).unwrap();
+        let d1 = streaming
+            .compute_drift(DataDriftType::PopulationStabilityIndex)
+            .unwrap();
+        let mut stream = Vec::new();
+
+        for _ in 0..500 {
+            stream.push("a")
+        }
+
+        for _ in 0..490 {
+            stream.push("b")
+        }
+        streaming.update_stream_batch(&stream).unwrap();
+        let d2 = streaming
+            .compute_drift(DataDriftType::PopulationStabilityIndex)
+            .unwrap();
+
+        assert_eq!(streaming.total_samples(), 992);
+        assert!(d1 < 1e-9);
+        assert!(d2 < 1e-2);
+    }
+
+    // --- error paths ---
+
+    #[test]
+    fn categorical_batch_empty_baseline_returns_err() {
+        let empty: &[&str] = &[];
+        assert!(CategoricalDataDrift::new(empty).is_err());
+    }
+
+    #[test]
+    fn categorical_batch_empty_runtime_returns_err() {
+        let mut det = CategoricalDataDrift::new(&["a", "b", "c"]).unwrap();
+        let empty: &[&str] = &[];
+        assert!(
+            det.compute_drift(empty, DataDriftType::PopulationStabilityIndex)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn categorical_streaming_empty_batch_returns_err() {
+        let mut s = StreamingCategoricalDataDrift::new_flush(&["a", "b"], None, None).unwrap();
+        let empty: &[&str] = &[];
+        assert!(s.update_stream_batch(empty).is_err());
+    }
+
+    #[test]
+    fn categorical_streaming_compute_on_empty_returns_err() {
+        let mut s = StreamingCategoricalDataDrift::new_flush(&["a", "b"], None, None).unwrap();
+        assert!(
+            s.compute_drift(DataDriftType::PopulationStabilityIndex)
+                .is_err()
+        );
+    }
+
+    // --- novel label routing ---
+
+    #[test]
+    fn categorical_batch_novel_label_routes_to_other_bin() {
+        // runtime with only unseen labels should produce higher drift than runtime matching baseline
+        let baseline = ["a", "b", "a", "b", "a"];
+        let mut det = CategoricalDataDrift::new(&baseline).unwrap();
+
+        let matching_drift = det
+            .compute_drift(
+                &["a", "b", "a", "b", "a"],
+                DataDriftType::PopulationStabilityIndex,
+            )
+            .unwrap();
+        let novel_drift = det
+            .compute_drift(
+                &["x", "y", "z", "x", "y"],
+                DataDriftType::PopulationStabilityIndex,
+            )
+            .unwrap();
+
+        assert!(novel_drift > matching_drift);
+    }
+
+    // --- all drift types ---
+
+    #[test]
+    fn categorical_batch_all_drift_types_finite_nonnegative() {
+        let baseline = ["a", "a", "b", "b", "c"];
+        let runtime = ["a", "b", "b", "c", "c"];
+        let mut det = CategoricalDataDrift::new(&baseline).unwrap();
+
+        for drift_type in [
+            DataDriftType::PopulationStabilityIndex,
+            DataDriftType::KullbackLeibler,
+            DataDriftType::JensenShannon,
+            DataDriftType::WassersteinDistance,
+        ] {
+            let v = det.compute_drift(&runtime, drift_type).unwrap();
+            assert!(v.is_finite(), "{drift_type:?} produced non-finite value");
+            assert!(v >= 0.0, "{drift_type:?} produced negative value");
+        }
+    }
+
+    // --- reset_baseline ---
+
+    #[test]
+    fn categorical_batch_reset_baseline_changes_bin_count() {
+        let mut det = CategoricalDataDrift::new(&["a", "b"]).unwrap();
+        assert_eq!(det.rt_bins.len(), 3); // 2 labels + other
+
+        det.reset_baseline(&["a", "b", "c", "d"]).unwrap();
+        assert_eq!(det.rt_bins.len(), 5); // 4 labels + other
+    }
+
+    // --- export_baseline ---
+
+    #[test]
+    fn categorical_batch_export_baseline_contains_all_labels() {
+        let baseline = ["a", "b", "c", "a", "b"];
+        let det = CategoricalDataDrift::new(&baseline).unwrap();
+        let exported = det.export_baseline();
+
+        assert!(exported.contains_key("a"));
+        assert!(exported.contains_key("b"));
+        assert!(exported.contains_key("c"));
+        let sum: f64 = exported.values().sum();
+        assert!((sum - 1.0).abs() < 1e-9);
+    }
+
+    // --- streaming flush-mode extras ---
+
+    #[test]
+    fn categorical_streaming_flush_resets_stream() {
+        let mut s = StreamingCategoricalDataDrift::new_flush(&["a", "b"], None, None).unwrap();
+        s.update_stream_batch(&["a", "b", "a"]).unwrap();
+        assert!(!s.is_empty());
+        s.flush();
+        assert!(s.is_empty());
+        assert_eq!(s.total_samples(), 0);
+    }
+
+    #[test]
+    fn categorical_streaming_novel_label_accumulates_in_other_bin() {
+        let mut s = StreamingCategoricalDataDrift::new_flush(&["a", "b"], None, None).unwrap();
+        // push only labels not in the baseline
+        s.update_stream_batch(&["x", "y", "x", "z"]).unwrap();
+
+        // drift should be elevated since all traffic is in the other bin
+        let drift = s
+            .compute_drift(DataDriftType::PopulationStabilityIndex)
+            .unwrap();
+        assert!(drift > 0.5);
+    }
+
+    #[test]
+    fn categorical_streaming_reset_baseline_clears_stream() {
+        let mut s = StreamingCategoricalDataDrift::new_flush(&["a", "b"], None, None).unwrap();
+        s.update_stream_batch(&["a", "b"]).unwrap();
+
+        s.reset_baseline(&["x", "y", "z"]).unwrap();
+        assert!(s.is_empty());
+        assert_eq!(s.total_samples(), 0);
+        assert_eq!(s.stream_bins.len(), 4); // 3 labels + other
+    }
+
+    // --- decay mode ---
+
+    #[test]
+    fn categorical_decay_empty_compute_returns_err() {
+        let mut s = StreamingCategoricalDataDrift::<&str, DecayModeMark>::new_decay(
+            &["a", "b"],
+            Some(std::num::NonZeroU64::new(1).unwrap()),
+        )
+        .unwrap();
+        assert!(
+            s.compute_drift(DataDriftType::PopulationStabilityIndex)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn categorical_decay_reduces_total_samples() {
+        // half_life=1 → α=0.5
+        let mut s = StreamingCategoricalDataDrift::<&str, DecayModeMark>::new_decay(
+            &["a", "b"],
+            Some(std::num::NonZeroU64::new(1).unwrap()),
+        )
+        .unwrap();
+
+        let data: Vec<&str> = (0..100)
+            .map(|i| if i % 2 == 0 { "a" } else { "b" })
+            .collect();
+        s.update_stream_batch(&data).unwrap();
+        assert_eq!(s.total_samples(), 100);
+
+        s.compute_drift(DataDriftType::PopulationStabilityIndex)
+            .unwrap();
+        assert!(s.total_samples() < 100);
+    }
+
+    #[test]
+    fn categorical_decay_multiple_criteria_applies_decay_once() {
+        let half_life = std::num::NonZeroU64::new(1).unwrap();
+        let data: Vec<&str> = (0..100)
+            .map(|i| if i % 2 == 0 { "a" } else { "b" })
+            .collect();
+
+        let mut s_multi = StreamingCategoricalDataDrift::<&str, DecayModeMark>::new_decay(
+            &["a", "b"],
+            Some(half_life),
+        )
+        .unwrap();
+        s_multi.update_stream_batch(&data).unwrap();
+        s_multi
+            .compute_drift_multiple_criteria(&[
+                DataDriftType::PopulationStabilityIndex,
+                DataDriftType::KullbackLeibler,
+                DataDriftType::JensenShannon,
+            ])
+            .unwrap();
+        let samples_multi = s_multi.total_samples();
+
+        let mut s_single = StreamingCategoricalDataDrift::<&str, DecayModeMark>::new_decay(
+            &["a", "b"],
+            Some(half_life),
+        )
+        .unwrap();
+        s_single.update_stream_batch(&data).unwrap();
+        s_single
+            .compute_drift(DataDriftType::PopulationStabilityIndex)
+            .unwrap();
+        let samples_single = s_single.total_samples();
+
+        assert_eq!(samples_multi, samples_single);
+    }
+}
