@@ -4,7 +4,7 @@ use crate::{
         error::{DriftError, DriftExportError},
         nullable_categorical_derive_baseline_state,
     },
-    export::CategoricalDriftBaselineExport,
+    export::{CategoricalDriftBaselineExport, NullableCategoricalDriftBaselineExport},
 };
 use ahash::HashMap;
 use std::borrow::Borrow;
@@ -204,5 +204,49 @@ impl<T: Hash + Ord + Clone> NullableBaselineCategoricalBins<T> {
     pub(crate) fn reset(&mut self, baseline_data: &[Option<T>]) -> Result<(), DriftError> {
         *self = Self::new(baseline_data)?;
         Ok(())
+    }
+}
+
+impl<T: Hash + Ord + Clone + serde::de::DeserializeOwned>
+    TryFrom<NullableCategoricalDriftBaselineExport> for NullableBaselineCategoricalBins<T>
+{
+    type Error = DriftExportError;
+    fn try_from(export: NullableCategoricalDriftBaselineExport) -> Result<Self, Self::Error> {
+        let NullableCategoricalDriftBaselineExport {
+            baseline_hist,
+            baseline_values,
+            n,
+            null_n,
+        } = export;
+
+        if baseline_hist.len() - 1 != baseline_values.len() {
+            return Err(DriftExportError::InvalidDataShape);
+        }
+        let mut labels: BTreeSet<T> = BTreeSet::new();
+
+        for v in baseline_values.into_iter() {
+            labels.insert(serde_json::from_value(v)?);
+        }
+
+        let idx_map: HashMap<T, usize> = labels
+            .into_iter()
+            .enumerate()
+            .map(|(i, label)| (label, i))
+            .collect();
+
+        Ok(NullableBaselineCategoricalBins {
+            baseline_bins: baseline_hist,
+            idx_map,
+            total_n: n,
+            null_n,
+        })
+    }
+}
+
+impl<T: Hash + Ord + Clone + serde::de::DeserializeOwned> NullableBaselineCategoricalBins<T> {
+    pub(crate) fn new_from_export(
+        export: NullableCategoricalDriftBaselineExport,
+    ) -> Result<NullableBaselineCategoricalBins<T>, DriftExportError> {
+        Self::try_from(export)
     }
 }

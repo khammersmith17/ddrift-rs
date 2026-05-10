@@ -45,6 +45,22 @@ impl<T: Hash + Ord + Clone> DriftContainer for NullableCategoricalDataDrift<T> {
     }
 }
 
+impl<T: Hash + Ord + Clone + serde::de::DeserializeOwned> NullableCategoricalDataDrift<T> {
+    pub fn new_from_export(
+        export: export::NullableCategoricalDriftBaselineExport,
+    ) -> Result<NullableCategoricalDataDrift<T>, DriftExportError> {
+        let baseline: NullableBaselineCategoricalBins<T> =
+            NullableBaselineCategoricalBins::try_from(export)?;
+        let rt_bins = vec![0_f64; baseline.n_bins()];
+        Ok(NullableCategoricalDataDrift {
+            baseline,
+            rt_bins,
+            n: 0_f64,
+            null_n: 0_f64,
+        })
+    }
+}
+
 impl<T: Hash + Ord + Clone> NullableCategoricalDataDrift<T> {
     /// Construct a new instance from a baseline dataset. The baseline is used to build a
     /// label-frequency histogram with one bin per unique value, plus one reserved "other" bin
@@ -73,6 +89,7 @@ impl<T: Hash + Ord + Clone> NullableCategoricalDataDrift<T> {
         runtime_data: &[Option<T>],
         drift_type: DataDriftType,
     ) -> Result<(f64, f64), DriftError> {
+        // TODO: define type for this
         self.build_rt_hist(runtime_data)?;
         let drift = global_compute_drift(self, drift_type);
         self.clear_rt();
