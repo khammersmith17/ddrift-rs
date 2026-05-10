@@ -143,6 +143,33 @@ impl<T: Hash + Ord + Clone> BaselineCategoricalBins<T> {
     }
 }
 
+impl<T: Hash + Ord + Clone + serde::Serialize> TryInto<NullableCategoricalDriftBaselineExport>
+    for NullableBaselineCategoricalBins<T>
+{
+    type Error = serde_json::Error;
+    fn try_into(self) -> Result<NullableCategoricalDriftBaselineExport, Self::Error> {
+        let NullableBaselineCategoricalBins {
+            idx_map,
+            baseline_bins: baseline_hist,
+            total_n,
+            null_n,
+        } = self;
+
+        let value_set: BTreeSet<T> = idx_map.into_iter().map(|(key, _)| key).collect();
+        let mut baseline_values: Vec<serde_json::Value> = Vec::with_capacity(value_set.len());
+        for value in value_set.into_iter() {
+            baseline_values.push(serde_json::to_value(value)?);
+        }
+
+        Ok(NullableCategoricalDriftBaselineExport {
+            baseline_hist,
+            baseline_values,
+            n: total_n,
+            null_n,
+        })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct NullableBaselineCategoricalBins<T: Hash + Ord + Clone> {
     pub(crate) idx_map: HashMap<T, usize>,

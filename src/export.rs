@@ -61,6 +61,16 @@ pub struct CategoricalDriftBaselineExport {
 impl LoadDataDriftExport for CategoricalDriftBaselineExport {}
 
 #[derive(Debug, Deserialize, Serialize)]
+pub struct StreamingCategoricalStatefulExport {
+    pub baseline: CategoricalDriftBaselineExport,
+    pub stream_mode: StreamingDriftMode,
+    pub stream_bins: Vec<f64>,
+    pub total_stream_size: f64,
+}
+
+impl LoadDataDriftExport for StreamingCategoricalStatefulExport {}
+
+#[derive(Debug, Deserialize, Serialize)]
 pub struct NullableCategoricalDriftBaselineExport {
     pub baseline_hist: Vec<f64>,
     pub baseline_values: Vec<Value>,
@@ -79,11 +89,20 @@ pub struct StreamingCategoricalBaseExport {
 impl LoadDataDriftExport for StreamingCategoricalBaseExport {}
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct StreamingCategoricalStatefulExport {
-    pub stream_bins: Vec<f64>,
-    pub baseline: CategoricalDriftBaselineExport,
-
+pub struct NullableStreamingCategoricalBaseExport {
+    pub baseline: NullableCategoricalDriftBaselineExport,
     pub stream_mode: StreamingDriftMode,
 }
 
-impl LoadDataDriftExport for StreamingCategoricalStatefulExport {}
+impl LoadDataDriftExport for NullableStreamingCategoricalBaseExport {}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct NullableStreamingCategoricalStatefulExport {
+    pub stream_bins: Vec<f64>,
+    pub baseline: NullableCategoricalDriftBaselineExport,
+    pub stream_mode: StreamingDriftMode,
+    pub total_n: f64,
+    pub null_n: f64,
+}
+
+impl LoadDataDriftExport for NullableStreamingCategoricalStatefulExport {}
