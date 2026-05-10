@@ -30,3 +30,18 @@ pub struct DecayModeMark;
 pub(crate) trait StreamingDataDriftMark {}
 impl StreamingDataDriftMark for FlushModeMark {}
 impl StreamingDataDriftMark for DecayModeMark {}
+
+pub struct DriftComputation {
+    pub drift_type: crate::core::drift_metrics::DataDriftType,
+    pub drift_magnitude: f64,
+}
+
+pub struct NullableDriftComputation {
+    pub drift: DriftComputation,
+    pub null_percentage: f64,
+}
+
+pub struct NullableDriftComputationMulti {
+    pub drift: Vec<DriftComputation>,
+    pub null_percentage: f64,
+}

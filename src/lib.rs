@@ -6,7 +6,9 @@ use core::{
     bin_edges::ContinuousBinEdges, distribution::QuantileType, drift_metrics::DataDriftType,
     error::DriftError,
 };
-use drift_types::{categorical::CategoricalDataDrift, continuous::ContinuousDataDrift};
+use drift_types::{
+    DriftComputation, categorical::CategoricalDataDrift, continuous::ContinuousDataDrift,
+};
 use num_traits::Float;
 use std::hash::Hash;
 
@@ -35,7 +37,7 @@ pub fn compute_drift_continuous_distribution<T: Float + Send + Sync>(
     candidate_distribution: &[T],
     drift_metrics: &[DataDriftType],
     quantile_type: Option<QuantileType>,
-) -> Result<Vec<f64>, DriftError> {
+) -> Result<Vec<DriftComputation>, DriftError> {
     let mut drift_container =
         ContinuousDataDrift::new_from_baseline(quantile_type, baseline_distribution)?;
     let drift_res =
@@ -47,7 +49,7 @@ pub fn compute_drift_categorical_distribution<T: Hash + Ord + Clone>(
     baseline_distribution: &[T],
     candidate_distribution: &[T],
     drift_metrics: &[DataDriftType],
-) -> Result<Vec<f64>, DriftError> {
+) -> Result<Vec<DriftComputation>, DriftError> {
     let mut drift_container = CategoricalDataDrift::new(baseline_distribution)?;
     let drift_res =
         drift_container.compute_drift_multiple_criteria(candidate_distribution, drift_metrics)?;
@@ -61,7 +63,7 @@ pub fn compute_drift_categorical_distribution_sync<T: Hash + Ord + Clone + Sync>
     baseline_distribution: &[T],
     candidate_distribution: &[T],
     drift_metrics: &[DataDriftType],
-) -> Result<Vec<f64>, DriftError> {
+) -> Result<Vec<DriftComputation>, DriftError> {
     let mut drift_container = CategoricalDataDrift::new(baseline_distribution)?;
     let drift_res =
         drift_container.compute_drift_multiple_criteria(candidate_distribution, drift_metrics)?;
@@ -84,7 +86,7 @@ mod tests {
             compute_drift_continuous_distribution(&baseline, &candidate, &metrics, None).unwrap();
 
         assert_eq!(result.len(), 1);
-        assert!(result[0].abs() < 1e-9);
+        assert!(result[0].drift_magnitude.abs() < 1e-9);
     }
 
     #[test]
@@ -97,7 +99,7 @@ mod tests {
             compute_drift_continuous_distribution(&baseline, &candidate, &metrics, None).unwrap();
 
         assert_eq!(result.len(), 1);
-        assert!(result[0] > 0.5);
+        assert!(result[0].drift_magnitude > 0.5);
     }
 
     #[test]
@@ -116,7 +118,7 @@ mod tests {
 
         assert_eq!(result.len(), 4);
         for score in &result {
-            assert!(score.abs() < 1e-9);
+            assert!(score.drift_magnitude.abs() < 1e-9);
         }
     }
 
@@ -135,7 +137,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(result.len(), 1);
-        assert!(result[0].abs() < 1e-9);
+        assert!(result[0].drift_magnitude.abs() < 1e-9);
     }
 
     #[test]
@@ -161,7 +163,7 @@ mod tests {
             compute_drift_categorical_distribution(&baseline, &candidate, &metrics).unwrap();
 
         assert_eq!(result.len(), 1);
-        assert!(result[0].abs() < 1e-9);
+        assert!(result[0].drift_magnitude.abs() < 1e-9);
     }
 
     #[test]
@@ -174,7 +176,7 @@ mod tests {
             compute_drift_categorical_distribution(&baseline, &candidate, &metrics).unwrap();
 
         assert_eq!(result.len(), 1);
-        assert!(result[0] > 0.1);
+        assert!(result[0].drift_magnitude > 0.1);
     }
 
     #[test]
@@ -193,7 +195,7 @@ mod tests {
 
         assert_eq!(result.len(), 4);
         for score in &result {
-            assert!(score.abs() < 1e-9);
+            assert!(score.drift_magnitude.abs() < 1e-9);
         }
     }
 
@@ -208,7 +210,7 @@ mod tests {
             compute_drift_categorical_distribution(&baseline, &candidate, &metrics).unwrap();
 
         assert_eq!(result.len(), 1);
-        assert!(result[0] >= 0.0);
+        assert!(result[0].drift_magnitude >= 0.0);
     }
 
     #[test]
@@ -221,7 +223,7 @@ mod tests {
             compute_drift_categorical_distribution(&baseline, &candidate, &metrics).unwrap();
 
         assert_eq!(result.len(), 1);
-        assert!(result[0].abs() < 1e-9);
+        assert!(result[0].drift_magnitude.abs() < 1e-9);
     }
 
     #[test]

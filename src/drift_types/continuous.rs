@@ -1,12 +1,16 @@
 use super::{
-    DecayModeMark, FlushModeMark, StreamingDataDriftMark, constants, stream_mode::StreamModeInner,
+    DecayModeMark, DriftComputation, FlushModeMark, StreamingDataDriftMark, constants,
+    stream_mode::StreamModeInner,
 };
 use crate::{
     baseline::continuous::BaselineContinuousBins,
     core::{
         compute_dataset_from_bins_continuous,
         distribution::QuantileType,
-        drift_metrics::{DataDriftType, DriftContainer, DriftContainerType, global_compute_drift},
+        drift_metrics::{
+            DataDriftType, DriftContainer, DriftContainerType, streaming_drift_multi,
+            streaming_drift_single,
+        },
         error::{DriftError, DriftExportError},
     },
     export,
@@ -118,9 +122,9 @@ impl<T: Float + Send + Sync> ContinuousDataDrift<T> {
         &mut self,
         runtime_data: &[T],
         drift_type: DataDriftType,
-    ) -> Result<f64, DriftError> {
+    ) -> Result<DriftComputation, DriftError> {
         self.build_rt_hist(runtime_data)?;
-        let drift = global_compute_drift(self, drift_type);
+        let drift = streaming_drift_single(self, drift_type);
         self.clear_rt();
         Ok(drift)
     }
@@ -137,12 +141,9 @@ impl<T: Float + Send + Sync> ContinuousDataDrift<T> {
         &mut self,
         runtime_data: &[T],
         drift_types: &[DataDriftType],
-    ) -> Result<Vec<f64>, DriftError> {
+    ) -> Result<Vec<DriftComputation>, DriftError> {
         self.build_rt_hist(runtime_data)?;
-        let drift = drift_types
-            .iter()
-            .map(|drift_type| global_compute_drift(self, *drift_type))
-            .collect();
+        let drift = streaming_drift_multi(self, drift_types);
         self.clear_rt();
         Ok(drift)
     }
@@ -356,12 +357,15 @@ impl<T: Float> StreamingContinuousDataDrift<T, DecayModeMark> {
     /// Returns [`DriftError::EmptyRuntimeData`] if no data has been accumulated.
     ///
     /// [`compute_drift_multiple_criteria`]: StreamingContinuousDataDrift::compute_drift_multiple_criteria
-    pub fn compute_drift(&mut self, drift_type: DataDriftType) -> Result<f64, DriftError> {
+    pub fn compute_drift(
+        &mut self,
+        drift_type: DataDriftType,
+    ) -> Result<DriftComputation, DriftError> {
         if self.is_empty() {
             return Err(DriftError::EmptyRuntimeData);
         }
         self.apply_decay();
-        Ok(global_compute_drift(self, drift_type))
+        Ok(streaming_drift_single(self, drift_type))
     }
 
     /// Compute multiple drift metrics against the accumulated stream in a single call. Decay is
@@ -375,15 +379,12 @@ impl<T: Float> StreamingContinuousDataDrift<T, DecayModeMark> {
     pub fn compute_drift_multiple_criteria(
         &mut self,
         drift_types: &[DataDriftType],
-    ) -> Result<Vec<f64>, DriftError> {
+    ) -> Result<Vec<DriftComputation>, DriftError> {
         if self.is_empty() {
             return Err(DriftError::EmptyRuntimeData);
         }
         self.apply_decay();
-        Ok(drift_types
-            .iter()
-            .map(|drift_t| global_compute_drift(self, *drift_t))
-            .collect())
+        Ok(streaming_drift_multi(self, drift_types))
     }
 
     fn apply_decay(&mut self) {
@@ -549,11 +550,14 @@ impl<T: Float> StreamingContinuousDataDrift<T, FlushModeMark> {
     /// flush.
     ///
     /// [`compute_drift_multiple_criteria`]: StreamingContinuousDataDrift::compute_drift_multiple_criteria
-    pub fn compute_drift(&mut self, drift_type: DataDriftType) -> Result<f64, DriftError> {
+    pub fn compute_drift(
+        &mut self,
+        drift_type: DataDriftType,
+    ) -> Result<DriftComputation, DriftError> {
         if self.is_empty() {
             return Err(DriftError::EmptyRuntimeData);
         }
-        Ok(global_compute_drift(self, drift_type))
+        Ok(streaming_drift_single(self, drift_type))
     }
 
     /// Compute multiple drift metrics against the accumulated stream in a single call. Prefer
@@ -567,15 +571,12 @@ impl<T: Float> StreamingContinuousDataDrift<T, FlushModeMark> {
     pub fn compute_drift_multiple_criteria(
         &mut self,
         drift_types: &[DataDriftType],
-    ) -> Result<Vec<f64>, DriftError> {
+    ) -> Result<Vec<DriftComputation>, DriftError> {
         if self.is_empty() {
             return Err(DriftError::EmptyRuntimeData);
         }
 
-        Ok(drift_types
-            .iter()
-            .map(|drift_t| global_compute_drift(self, *drift_t))
-            .collect())
+        Ok(streaming_drift_multi(self, drift_types))
     }
 
     /// Push a single example into the stream. A flush is triggered before the item is recorded
@@ -743,7 +744,7 @@ mod continuous_tests {
         let drift = psi
             .compute_drift(&runtime, DataDriftType::PopulationStabilityIndex)
             .unwrap();
-        assert!(drift.abs() < 1e-9);
+        assert!(drift.drift_magnitude.abs() < 1e-9);
     }
 
     #[test]
@@ -754,8 +755,7 @@ mod continuous_tests {
         let drift = psi
             .compute_drift(&runtime, DataDriftType::PopulationStabilityIndex)
             .unwrap();
-        dbg!(drift);
-        assert!(drift > 0.5);
+        assert!(drift.drift_magnitude > 0.5);
     }
 
     #[test]
@@ -779,8 +779,8 @@ mod continuous_tests {
             .compute_drift(DataDriftType::PopulationStabilityIndex)
             .unwrap();
 
-        assert!(d1.abs() < 1e-9);
-        assert!(d2.abs() < 1e-2);
+        assert!(d1.drift_magnitude.abs() < 1e-9);
+        assert!(d2.drift_magnitude.abs() < 1e-2);
         assert_eq!(streaming.total_samples(), 11);
     }
 
@@ -851,7 +851,7 @@ mod continuous_tests {
         let d2 = det
             .compute_drift(&runtime, DataDriftType::PopulationStabilityIndex)
             .unwrap();
-        assert!((d1 - d2).abs() < 1e-12);
+        assert!((d1.drift_magnitude - d2.drift_magnitude).abs() < 1e-12);
     }
 
     // --- all drift types ---
@@ -869,8 +869,14 @@ mod continuous_tests {
             DataDriftType::WassersteinDistance,
         ] {
             let v = det.compute_drift(&runtime, drift_type).unwrap();
-            assert!(v.is_finite(), "{drift_type:?} produced non-finite value");
-            assert!(v >= 0.0, "{drift_type:?} produced negative value");
+            assert!(
+                v.drift_magnitude.is_finite(),
+                "{drift_type:?} produced non-finite value"
+            );
+            assert!(
+                v.drift_magnitude >= 0.0,
+                "{drift_type:?} produced negative value"
+            );
         }
     }
 

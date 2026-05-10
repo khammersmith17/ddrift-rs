@@ -1,3 +1,4 @@
+use crate::drift_types::DriftComputation;
 const STABILITY_EPS: f64 = 1e-12;
 
 // Enum to be used in DriftContainer trait when drift metric computation args differ between the
@@ -44,6 +45,27 @@ pub(crate) trait DriftContainer {
     fn num_examples(&self) -> f64;
 
     fn container_type(&self) -> DriftContainerType;
+}
+
+pub(crate) fn streaming_drift_single<T: DriftContainer>(
+    drift_container: &T,
+    drift_type: DataDriftType,
+) -> DriftComputation {
+    let drift_magnitude = global_compute_drift(drift_container, drift_type);
+    DriftComputation {
+        drift_magnitude,
+        drift_type,
+    }
+}
+
+pub(crate) fn streaming_drift_multi<T: DriftContainer>(
+    drift_container: &T,
+    drift_types: &[DataDriftType],
+) -> Vec<DriftComputation> {
+    drift_types
+        .iter()
+        .map(|t| streaming_drift_single(drift_container, *t))
+        .collect()
 }
 
 /// Global drift computation that allows a shared interface between all drift types.

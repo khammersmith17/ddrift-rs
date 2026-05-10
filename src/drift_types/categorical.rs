@@ -1,5 +1,6 @@
 use super::{
-    DecayModeMark, FlushModeMark, StreamingDataDriftMark, constants, stream_mode::StreamModeInner,
+    DecayModeMark, DriftComputation, FlushModeMark, NullableDriftComputation,
+    NullableDriftComputationMulti, StreamingDataDriftMark, constants, stream_mode::StreamModeInner,
 };
 use crate::{
     baseline::categorical::{BaselineCategoricalBins, NullableBaselineCategoricalBins},
@@ -7,7 +8,10 @@ use crate::{
     core::{
         compute_dataset_from_bins_categorical, compute_dataset_from_bins_categorical_parallel,
         compute_dataset_from_nullable_bins_categorical,
-        drift_metrics::{DataDriftType, DriftContainer, DriftContainerType, global_compute_drift},
+        drift_metrics::{
+            DataDriftType, DriftContainer, DriftContainerType, global_compute_drift,
+            streaming_drift_multi, streaming_drift_single,
+        },
         error::{DriftError, DriftExportError},
     },
     export,
@@ -88,26 +92,30 @@ impl<T: Hash + Ord + Clone> NullableCategoricalDataDrift<T> {
         &mut self,
         runtime_data: &[Option<T>],
         drift_type: DataDriftType,
-    ) -> Result<(f64, f64), DriftError> {
-        // TODO: define type for return for clarity
+    ) -> Result<NullableDriftComputation, DriftError> {
         self.build_rt_hist(runtime_data)?;
-        let drift = global_compute_drift(self, drift_type);
+        let null_percentage = self.null_n / self.n;
+        let drift = streaming_drift_single(self, drift_type);
         self.clear_rt();
-        Ok((drift, self.null_n / self.n))
+        Ok(NullableDriftComputation {
+            drift,
+            null_percentage,
+        })
     }
 
     pub fn compute_drift_multiple_criteria(
         &mut self,
         runtime_data: &[Option<T>],
         drift_types: &[DataDriftType],
-    ) -> Result<(Vec<f64>, f64), DriftError> {
+    ) -> Result<NullableDriftComputationMulti, DriftError> {
         self.build_rt_hist(runtime_data)?;
-        let drift: Vec<f64> = drift_types
-            .iter()
-            .map(|t| global_compute_drift(self, *t))
-            .collect();
+        let null_percentage = self.null_n / self.n;
+        let drift = streaming_drift_multi(self, drift_types);
         self.clear_rt();
-        Ok((drift, self.null_n / self.n))
+        Ok(NullableDriftComputationMulti {
+            drift,
+            null_percentage,
+        })
     }
 
     fn build_rt_hist(&mut self, runtime_data: &[Option<T>]) -> Result<(), DriftError> {
@@ -171,11 +179,11 @@ impl<T: Hash + Ord + Clone> NullableStreamingCategoricalDataDrift<T, FlushModeMa
     ///
     /// Returns [`DriftError::EmptyBaselineData`] if `baseline_data` is empty.
     pub fn new_flush(
-        baseline_data: &[T],
+        baseline_data: &[Option<T>],
         flush_size_opt: Option<u64>,
         flush_cadence_opt: Option<Duration>,
-    ) -> Result<StreamingCategoricalDataDrift<T, FlushModeMark>, DriftError> {
-        let baseline = BaselineCategoricalBins::new(baseline_data)?;
+    ) -> Result<NullableStreamingCategoricalDataDrift<T, FlushModeMark>, DriftError> {
+        let baseline = NullableBaselineCategoricalBins::new(baseline_data)?;
         let bl_hist_len = baseline.baseline_bins.len();
         let stream_bins: Vec<f64> = vec![0_f64; bl_hist_len];
         let size = flush_size_opt.unwrap_or(constants::DEFAULT_MAX_STREAM_SIZE);
@@ -187,10 +195,11 @@ impl<T: Hash + Ord + Clone> NullableStreamingCategoricalDataDrift<T, FlushModeMa
             last_flush_ts: Instant::now(),
         };
 
-        Ok(StreamingCategoricalDataDrift {
+        Ok(NullableStreamingCategoricalDataDrift {
             stream_bins,
             baseline,
             total_stream_size: 0_f64,
+            null_n: 0_f64,
             mode,
             _mark: PhantomData,
         })
@@ -205,11 +214,20 @@ impl<T: Hash + Ord + Clone> NullableStreamingCategoricalDataDrift<T, FlushModeMa
     /// flush.
     ///
     /// [`compute_drift_multiple_criteria`]: StreamingCategoricalDataDrift::compute_drift_multiple_criteria
-    pub fn compute_drift(&mut self, drift_type: DataDriftType) -> Result<f64, DriftError> {
+    pub fn compute_drift(
+        &mut self,
+        drift_type: DataDriftType,
+    ) -> Result<NullableDriftComputation, DriftError> {
         if self.is_empty() {
             return Err(DriftError::EmptyRuntimeData);
         }
-        Ok(global_compute_drift(self, drift_type))
+        Ok(NullableDriftComputation {
+            drift: DriftComputation {
+                drift_magnitude: global_compute_drift(self, drift_type),
+                drift_type,
+            },
+            null_percentage: self.null_n / self.total_stream_size,
+        })
     }
 
     /// Compute multiple drift metrics against the accumulated stream in a single call. Prefer
@@ -223,14 +241,15 @@ impl<T: Hash + Ord + Clone> NullableStreamingCategoricalDataDrift<T, FlushModeMa
     pub fn compute_drift_multiple_criteria(
         &mut self,
         drift_types: &[DataDriftType],
-    ) -> Result<Vec<f64>, DriftError> {
+    ) -> Result<NullableDriftComputationMulti, DriftError> {
         if self.is_empty() {
             return Err(DriftError::EmptyRuntimeData);
         }
-        Ok(drift_types
-            .iter()
-            .map(|drift_t| global_compute_drift(self, *drift_t))
-            .collect())
+
+        Ok(NullableDriftComputationMulti {
+            drift: streaming_drift_multi(self, drift_types),
+            null_percentage: self.null_n / self.total_stream_size,
+        })
     }
 
     /// Push a single label into the stream. A flush is triggered before the item is recorded
@@ -273,23 +292,24 @@ impl<T: Hash + Ord + Clone + serde::de::DeserializeOwned>
     NullableStreamingCategoricalDataDrift<T, FlushModeMark>
 {
     pub fn new_from_base_export(
-        export: export::StreamingCategoricalBaseExport,
-    ) -> Result<StreamingCategoricalDataDrift<T, FlushModeMark>, DriftExportError> {
-        let export::StreamingCategoricalBaseExport {
+        export: export::NullableStreamingCategoricalBaseExport,
+    ) -> Result<NullableStreamingCategoricalDataDrift<T, FlushModeMark>, DriftExportError> {
+        let export::NullableStreamingCategoricalBaseExport {
             baseline: baseline_export,
             stream_mode,
         } = export;
         let mode: StreamModeInner = stream_mode.into();
-        let baseline = BaselineCategoricalBins::new_from_export(baseline_export)?;
+        let baseline = NullableBaselineCategoricalBins::new_from_export(baseline_export)?;
 
         if matches!(mode, StreamModeInner::ExponentialDecay(_)) {
             return Err(DriftExportError::InvalidDriftMode);
         }
         let n_bins = baseline.n_bins();
-        Ok(StreamingCategoricalDataDrift {
+        Ok(NullableStreamingCategoricalDataDrift {
             baseline,
             stream_bins: vec![0_f64; n_bins],
             total_stream_size: 0_f64,
+            null_n: 0_f64,
             mode,
             _mark: PhantomData,
         })
@@ -353,23 +373,24 @@ impl<T: Hash + Ord + Clone + serde::de::DeserializeOwned>
     NullableStreamingCategoricalDataDrift<T, DecayModeMark>
 {
     pub fn new_from_base_export(
-        export: export::StreamingCategoricalBaseExport,
-    ) -> Result<StreamingCategoricalDataDrift<T, DecayModeMark>, DriftExportError> {
-        let export::StreamingCategoricalBaseExport {
+        export: export::NullableStreamingCategoricalBaseExport,
+    ) -> Result<NullableStreamingCategoricalDataDrift<T, DecayModeMark>, DriftExportError> {
+        let export::NullableStreamingCategoricalBaseExport {
             baseline: baseline_export,
             stream_mode,
         } = export;
         let mode: StreamModeInner = stream_mode.into();
-        let baseline = BaselineCategoricalBins::new_from_export(baseline_export)?;
+        let baseline = NullableBaselineCategoricalBins::new_from_export(baseline_export)?;
 
         if matches!(mode, StreamModeInner::Flush { .. }) {
             return Err(DriftExportError::InvalidDriftMode);
         }
         let n_bins = baseline.n_bins();
-        Ok(StreamingCategoricalDataDrift {
+        Ok(NullableStreamingCategoricalDataDrift {
             baseline,
             stream_bins: vec![0_f64; n_bins],
             total_stream_size: 0_f64,
+            null_n: 0_f64,
             mode,
             _mark: PhantomData,
         })
@@ -451,20 +472,21 @@ impl<T: Hash + Ord + Clone> NullableStreamingCategoricalDataDrift<T, DecayModeMa
     /// [`compute_drift`]: StreamingCategoricalDataDrift::compute_drift
     /// [`compute_drift_multiple_criteria`]: StreamingCategoricalDataDrift::compute_drift_multiple_criteria
     pub fn new_decay(
-        baseline_data: &[T],
+        baseline_data: &[Option<T>],
         half_life_opt: Option<NonZeroU64>,
-    ) -> Result<StreamingCategoricalDataDrift<T, DecayModeMark>, DriftError> {
-        let baseline = BaselineCategoricalBins::new(baseline_data)?;
+    ) -> Result<NullableStreamingCategoricalDataDrift<T, DecayModeMark>, DriftError> {
+        let baseline = NullableBaselineCategoricalBins::new(baseline_data)?;
         let bl_hist_len = baseline.baseline_bins.len();
         let stream_bins: Vec<f64> = vec![0_f64; bl_hist_len];
         let half_life =
             half_life_opt.unwrap_or(NonZeroU64::new(constants::DEFAULT_DECAY_HALF_LIFE).unwrap());
         let mode = StreamModeInner::ExponentialDecay(0.5_f64.powf(1_f64 / half_life.get() as f64));
 
-        Ok(StreamingCategoricalDataDrift {
+        Ok(NullableStreamingCategoricalDataDrift {
             stream_bins,
             baseline,
             total_stream_size: 0_f64,
+            null_n: 0_f64,
             mode,
             _mark: PhantomData,
         })
@@ -480,12 +502,21 @@ impl<T: Hash + Ord + Clone> NullableStreamingCategoricalDataDrift<T, DecayModeMa
     /// Returns [`DriftError::EmptyRuntimeData`] if no data has been accumulated.
     ///
     /// [`compute_drift_multiple_criteria`]: StreamingCategoricalDataDrift::compute_drift_multiple_criteria
-    pub fn compute_drift(&mut self, drift_type: DataDriftType) -> Result<f64, DriftError> {
+    pub fn compute_drift(
+        &mut self,
+        drift_type: DataDriftType,
+    ) -> Result<NullableDriftComputation, DriftError> {
         if self.is_empty() {
             return Err(DriftError::EmptyRuntimeData);
         }
         self.apply_decay();
-        Ok(global_compute_drift(self, drift_type))
+        Ok(NullableDriftComputation {
+            drift: DriftComputation {
+                drift_magnitude: global_compute_drift(self, drift_type),
+                drift_type,
+            },
+            null_percentage: self.null_n / self.total_stream_size,
+        })
     }
 
     /// Compute multiple drift metrics against the accumulated stream in a single call. Decay is
@@ -499,15 +530,16 @@ impl<T: Hash + Ord + Clone> NullableStreamingCategoricalDataDrift<T, DecayModeMa
     pub fn compute_drift_multiple_criteria(
         &mut self,
         drift_types: &[DataDriftType],
-    ) -> Result<Vec<f64>, DriftError> {
+    ) -> Result<NullableDriftComputationMulti, DriftError> {
         if self.is_empty() {
             return Err(DriftError::EmptyRuntimeData);
         }
         self.apply_decay();
-        Ok(drift_types
-            .iter()
-            .map(|drift_t| global_compute_drift(self, *drift_t))
-            .collect())
+
+        Ok(NullableDriftComputationMulti {
+            drift: streaming_drift_multi(self, drift_types),
+            null_percentage: self.null_n / self.total_stream_size,
+        })
     }
 
     fn apply_decay(&mut self) {
@@ -711,9 +743,9 @@ impl<T: Hash + Ord + Clone + Sync> CategoricalDataDrift<T> {
         &mut self,
         runtime_data: &[T],
         drift_type: DataDriftType,
-    ) -> Result<f64, DriftError> {
+    ) -> Result<DriftComputation, DriftError> {
         self.build_rt_hist_parallel(runtime_data)?;
-        let drift = global_compute_drift(self, drift_type);
+        let drift = streaming_drift_single(self, drift_type);
         self.clear_rt();
         Ok(drift)
     }
@@ -733,12 +765,9 @@ impl<T: Hash + Ord + Clone + Sync> CategoricalDataDrift<T> {
         &mut self,
         runtime_data: &[T],
         drift_types: &[DataDriftType],
-    ) -> Result<Vec<f64>, DriftError> {
+    ) -> Result<Vec<DriftComputation>, DriftError> {
         self.build_rt_hist_parallel(runtime_data)?;
-        let drift = drift_types
-            .iter()
-            .map(|drift_type| global_compute_drift(self, *drift_type))
-            .collect();
+        let drift = streaming_drift_multi(self, drift_types);
         self.clear_rt();
         Ok(drift)
     }
@@ -775,9 +804,9 @@ impl<T: Hash + Ord + Clone> CategoricalDataDrift<T> {
         &mut self,
         runtime_data: &[T],
         drift_type: DataDriftType,
-    ) -> Result<f64, DriftError> {
+    ) -> Result<DriftComputation, DriftError> {
         self.build_rt_hist(runtime_data)?;
-        let drift = global_compute_drift(self, drift_type);
+        let drift = streaming_drift_single(self, drift_type);
         self.clear_rt();
         Ok(drift)
     }
@@ -796,12 +825,9 @@ impl<T: Hash + Ord + Clone> CategoricalDataDrift<T> {
         &mut self,
         runtime_data: &[T],
         drift_types: &[DataDriftType],
-    ) -> Result<Vec<f64>, DriftError> {
+    ) -> Result<Vec<DriftComputation>, DriftError> {
         self.build_rt_hist(runtime_data)?;
-        let drift = drift_types
-            .iter()
-            .map(|drift_type| global_compute_drift(self, *drift_type))
-            .collect();
+        let drift = streaming_drift_multi(self, drift_types);
         self.clear_rt();
         Ok(drift)
     }
@@ -953,11 +979,14 @@ impl<T: Hash + Ord + Clone> StreamingCategoricalDataDrift<T, FlushModeMark> {
     /// flush.
     ///
     /// [`compute_drift_multiple_criteria`]: StreamingCategoricalDataDrift::compute_drift_multiple_criteria
-    pub fn compute_drift(&mut self, drift_type: DataDriftType) -> Result<f64, DriftError> {
+    pub fn compute_drift(
+        &mut self,
+        drift_type: DataDriftType,
+    ) -> Result<DriftComputation, DriftError> {
         if self.is_empty() {
             return Err(DriftError::EmptyRuntimeData);
         }
-        Ok(global_compute_drift(self, drift_type))
+        Ok(streaming_drift_single(self, drift_type))
     }
 
     /// Compute multiple drift metrics against the accumulated stream in a single call. Prefer
@@ -971,14 +1000,11 @@ impl<T: Hash + Ord + Clone> StreamingCategoricalDataDrift<T, FlushModeMark> {
     pub fn compute_drift_multiple_criteria(
         &mut self,
         drift_types: &[DataDriftType],
-    ) -> Result<Vec<f64>, DriftError> {
+    ) -> Result<Vec<DriftComputation>, DriftError> {
         if self.is_empty() {
             return Err(DriftError::EmptyRuntimeData);
         }
-        Ok(drift_types
-            .iter()
-            .map(|drift_t| global_compute_drift(self, *drift_t))
-            .collect())
+        Ok(streaming_drift_multi(self, drift_types))
     }
 
     /// Push a single label into the stream. A flush is triggered before the item is recorded
@@ -1215,12 +1241,15 @@ impl<T: Hash + Ord + Clone> StreamingCategoricalDataDrift<T, DecayModeMark> {
     /// Returns [`DriftError::EmptyRuntimeData`] if no data has been accumulated.
     ///
     /// [`compute_drift_multiple_criteria`]: StreamingCategoricalDataDrift::compute_drift_multiple_criteria
-    pub fn compute_drift(&mut self, drift_type: DataDriftType) -> Result<f64, DriftError> {
+    pub fn compute_drift(
+        &mut self,
+        drift_type: DataDriftType,
+    ) -> Result<DriftComputation, DriftError> {
         if self.is_empty() {
             return Err(DriftError::EmptyRuntimeData);
         }
         self.apply_decay();
-        Ok(global_compute_drift(self, drift_type))
+        Ok(streaming_drift_single(self, drift_type))
     }
 
     /// Compute multiple drift metrics against the accumulated stream in a single call. Decay is
@@ -1234,15 +1263,12 @@ impl<T: Hash + Ord + Clone> StreamingCategoricalDataDrift<T, DecayModeMark> {
     pub fn compute_drift_multiple_criteria(
         &mut self,
         drift_types: &[DataDriftType],
-    ) -> Result<Vec<f64>, DriftError> {
+    ) -> Result<Vec<DriftComputation>, DriftError> {
         if self.is_empty() {
             return Err(DriftError::EmptyRuntimeData);
         }
         self.apply_decay();
-        Ok(drift_types
-            .iter()
-            .map(|drift_t| global_compute_drift(self, *drift_t))
-            .collect())
+        Ok(streaming_drift_multi(self, drift_types))
     }
 
     fn apply_decay(&mut self) {
@@ -1363,7 +1389,7 @@ mod categorical_tests {
         let drift = psi
             .compute_drift(&runtime, DataDriftType::PopulationStabilityIndex)
             .unwrap();
-        assert!(drift.abs() < 1e-9);
+        assert!(drift.drift_magnitude.abs() < 1e-9);
     }
 
     #[test]
@@ -1374,7 +1400,7 @@ mod categorical_tests {
         let drift = psi
             .compute_drift(&runtime, DataDriftType::PopulationStabilityIndex)
             .unwrap();
-        assert!(drift > 0.5);
+        assert!(drift.drift_magnitude > 0.5);
     }
 
     #[test]
@@ -1402,8 +1428,8 @@ mod categorical_tests {
             .unwrap();
 
         assert_eq!(streaming.total_samples(), 992);
-        assert!(d1 < 1e-9);
-        assert!(d2 < 1e-2);
+        assert!(d1.drift_magnitude < 1e-9);
+        assert!(d2.drift_magnitude < 1e-2);
     }
 
     // --- error paths ---
@@ -1461,7 +1487,7 @@ mod categorical_tests {
             )
             .unwrap();
 
-        assert!(novel_drift > matching_drift);
+        assert!(novel_drift.drift_magnitude > matching_drift.drift_magnitude);
     }
 
     // --- all drift types ---
@@ -1479,8 +1505,14 @@ mod categorical_tests {
             DataDriftType::WassersteinDistance,
         ] {
             let v = det.compute_drift(&runtime, drift_type).unwrap();
-            assert!(v.is_finite(), "{drift_type:?} produced non-finite value");
-            assert!(v >= 0.0, "{drift_type:?} produced negative value");
+            assert!(
+                v.drift_magnitude.is_finite(),
+                "{drift_type:?} produced non-finite value"
+            );
+            assert!(
+                v.drift_magnitude >= 0.0,
+                "{drift_type:?} produced negative value"
+            );
         }
     }
 
@@ -1532,7 +1564,7 @@ mod categorical_tests {
         let drift = s
             .compute_drift(DataDriftType::PopulationStabilityIndex)
             .unwrap();
-        assert!(drift > 0.5);
+        assert!(drift.drift_magnitude > 0.5);
     }
 
     #[test]
