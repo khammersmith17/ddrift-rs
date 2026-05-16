@@ -22,6 +22,17 @@ pub(crate) fn compute_dataset_from_bins_continuous<T: Float + Send + Sync>(
     }
 }
 
+pub(crate) fn compute_dataset_from_bins_continuous_null_parallel<T: Float + Send + Sync>(
+    dataset: &[Option<T>],
+    edges: &ContinuousBinEdges<T>,
+) -> (Vec<f64>, usize) {
+    opt::continuous::parallel_approx_dataset_nullable(
+        dataset,
+        edges,
+        opt::get_thread_count(dataset.len()),
+    )
+}
+
 fn compute_dataset_from_bins_continuous_seq<T: Float>(
     dataset: &[T],
     edges: &ContinuousBinEdges<T>,

@@ -57,6 +57,46 @@ pub(crate) mod continuous {
         });
         hist
     }
+
+    pub(crate) fn parallel_approx_dataset_nullable<T: Float + Send + Sync>(
+        dataset: &[Option<T>],
+        bin_edges: &super::ContinuousBinEdges<T>,
+        thread_count: usize,
+    ) -> (Vec<f64>, usize) {
+        let n = dataset.len();
+        let chunk_size = (n + thread_count - 1) / thread_count;
+        let n_bins = bin_edges.n_bins();
+
+        let hist = std::thread::scope(|s| {
+            dataset
+                .chunks(chunk_size) // last slice is remainder
+                .map(|dataset_chunk| {
+                    s.spawn(|| {
+                        let mut count_none = 0_usize;
+                        let mut local_hist = vec![0_f64; n_bins];
+                        for example in dataset_chunk.iter() {
+                            match example {
+                                Some(ex) => local_hist[bin_edges.resolve_bin(*ex)] += 1_f64,
+                                None => count_none += 1,
+                            }
+                        }
+                        (local_hist, count_none)
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|t| t.join().unwrap()) // safe unwrap: thread will not panic
+                .fold(
+                    (vec![0_f64; n_bins], 0_usize),
+                    |(mut acc, mut none_c_acc), (local, null_count)| {
+                        none_c_acc += null_count;
+                        acc.iter_mut().zip(local.iter()).for_each(|(a, b)| *a += b);
+                        (acc, none_c_acc)
+                    },
+                )
+        });
+        hist
+    }
 }
 
 pub(crate) mod categorical {

@@ -31,17 +31,17 @@ pub(crate) trait StreamingDataDriftMark {}
 impl StreamingDataDriftMark for FlushModeMark {}
 impl StreamingDataDriftMark for DecayModeMark {}
 
-pub struct DriftComputation {
-    pub drift_type: crate::core::drift_metrics::DataDriftType,
+pub struct DriftComputation<T: crate::core::drift_metrics::DriftMetric> {
+    pub drift_type: T,
     pub drift_magnitude: f64,
 }
 
-pub struct NullableDriftComputation {
-    pub drift: DriftComputation,
+pub struct NullableDriftComputation<T: crate::core::drift_metrics::DriftMetric> {
+    pub drift: DriftComputation<T>,
     pub null_percentage: f64,
 }
 
-pub struct NullableDriftComputationMulti {
-    pub drift: Vec<DriftComputation>,
+pub struct NullableDriftComputationMulti<T: crate::core::drift_metrics::DriftMetric> {
+    pub drift: Vec<DriftComputation<T>>,
     pub null_percentage: f64,
 }

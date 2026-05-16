@@ -1,15 +1,15 @@
 use super::{
-    DecayModeMark, DriftComputation, FlushModeMark, StreamingDataDriftMark, constants,
-    stream_mode::StreamModeInner,
+    DecayModeMark, DriftComputation, FlushModeMark, NullableDriftComputation,
+    NullableDriftComputationMulti, StreamingDataDriftMark, constants, stream_mode::StreamModeInner,
 };
 use crate::{
-    baseline::continuous::BaselineContinuousBins,
+    baseline::continuous::{BaselineContinuousBins, NullableBaselineContinuousBins},
     core::{
-        compute_dataset_from_bins_continuous,
+        compute_dataset_from_bins_continuous, compute_dataset_from_bins_continuous_null_parallel,
         distribution::QuantileType,
         drift_metrics::{
-            DataDriftType, DriftContainer, DriftContainerType, streaming_drift_multi,
-            streaming_drift_single,
+            ContinuousDriftType, DriftContainer, compute_drift_continuous,
+            compute_drift_continuous_multi,
         },
         error::{DriftError, DriftExportError},
     },
@@ -50,23 +50,24 @@ use std::{
 pub struct ContinuousDataDrift<T: Float> {
     baseline: BaselineContinuousBins<T>,
     rt_bins: Vec<f64>,
+    sample_size: f64,
 }
 
 impl<T: Float> DriftContainer for ContinuousDataDrift<T> {
-    fn get_baseline_hist(&self) -> &[f64] {
+    fn baseline_bins(&self) -> &[f64] {
         &self.baseline.baseline_hist
     }
 
-    fn get_runtime_bins(&self) -> &[f64] {
+    fn runtime_bins(&self) -> &[f64] {
         &self.rt_bins
     }
 
-    fn num_examples(&self) -> f64 {
-        self.rt_bins.iter().sum()
+    fn baseline_sample_size(&self) -> f64 {
+        self.baseline.population_size()
     }
 
-    fn container_type(&self) -> DriftContainerType {
-        DriftContainerType::Continuous
+    fn runtime_sample_size(&self) -> f64 {
+        self.sample_size
     }
 }
 
@@ -76,7 +77,11 @@ impl<T: Float + serde::de::DeserializeOwned> ContinuousDataDrift<T> {
     ) -> Result<ContinuousDataDrift<T>, DriftExportError> {
         let baseline = BaselineContinuousBins::new_from_export(export)?;
         let rt_bins = vec![0_f64; baseline.n_bins()];
-        Ok(ContinuousDataDrift { baseline, rt_bins })
+        Ok(ContinuousDataDrift {
+            baseline,
+            rt_bins,
+            sample_size: 0_f64,
+        })
     }
 }
 
@@ -106,9 +111,14 @@ impl<T: Float + Send + Sync> ContinuousDataDrift<T> {
         quantile_type: Option<QuantileType>,
         bl_slice: &[T],
     ) -> Result<ContinuousDataDrift<T>, DriftError> {
+        let sample_size = bl_slice.len() as f64;
         let baseline = BaselineContinuousBins::new(bl_slice, quantile_type.unwrap_or_default())?;
         let rt_bins = vec![0_f64; baseline.baseline_hist.len()];
-        Ok(ContinuousDataDrift { baseline, rt_bins })
+        Ok(ContinuousDataDrift {
+            baseline,
+            rt_bins,
+            sample_size,
+        })
     }
 
     /// Compute drift between the baseline and the provided runtime dataset. The runtime data is
@@ -121,10 +131,10 @@ impl<T: Float + Send + Sync> ContinuousDataDrift<T> {
     pub fn compute_drift(
         &mut self,
         runtime_data: &[T],
-        drift_type: DataDriftType,
-    ) -> Result<DriftComputation, DriftError> {
+        drift_type: ContinuousDriftType,
+    ) -> Result<DriftComputation<ContinuousDriftType>, DriftError> {
         self.build_rt_hist(runtime_data)?;
-        let drift = streaming_drift_single(self, drift_type);
+        let drift = compute_drift_continuous(self, drift_type);
         self.clear_rt();
         Ok(drift)
     }
@@ -140,10 +150,10 @@ impl<T: Float + Send + Sync> ContinuousDataDrift<T> {
     pub fn compute_drift_multiple_criteria(
         &mut self,
         runtime_data: &[T],
-        drift_types: &[DataDriftType],
-    ) -> Result<Vec<DriftComputation>, DriftError> {
+        drift_types: &[ContinuousDriftType],
+    ) -> Result<Vec<DriftComputation<ContinuousDriftType>>, DriftError> {
         self.build_rt_hist(runtime_data)?;
-        let drift = streaming_drift_multi(self, drift_types);
+        let drift = compute_drift_continuous_multi(self, drift_types);
         self.clear_rt();
         Ok(drift)
     }
@@ -175,6 +185,7 @@ impl<T: Float + Send + Sync> ContinuousDataDrift<T> {
 
     fn clear_rt(&mut self) {
         self.rt_bins.fill(0.);
+        self.sample_size = 0_f64;
     }
 }
 
@@ -193,6 +204,159 @@ impl<T: Float> ContinuousDataDrift<T> {
 
 impl<T: Float + serde::Serialize> ContinuousDataDrift<T> {
     pub fn export_baseline_state(self) -> export::ContinuousDriftBaselineExport<T> {
+        self.baseline.into()
+    }
+}
+
+pub struct NullableContinuousDataDrift<T: Float> {
+    baseline: NullableBaselineContinuousBins<T>,
+    rt_bins: Vec<f64>,
+    n: f64,
+    null_n: f64,
+}
+
+impl<T: Float> DriftContainer for NullableContinuousDataDrift<T> {
+    fn baseline_bins(&self) -> &[f64] {
+        &self.baseline.baseline_hist
+    }
+
+    fn runtime_bins(&self) -> &[f64] {
+        &self.rt_bins
+    }
+
+    fn runtime_sample_size(&self) -> f64 {
+        self.n - self.null_n
+    }
+
+    fn baseline_sample_size(&self) -> f64 {
+        self.baseline.population_size()
+    }
+}
+
+impl<T: Float + serde::de::DeserializeOwned> NullableContinuousDataDrift<T> {
+    pub fn new_from_export(
+        export: export::NullableContinuousDriftBaselineExport<T>,
+    ) -> Result<NullableContinuousDataDrift<T>, DriftExportError> {
+        let baseline = NullableBaselineContinuousBins::new_from_export(export)?;
+        let rt_bins = vec![0_f64; baseline.n_bins()];
+        Ok(NullableContinuousDataDrift {
+            baseline,
+            rt_bins,
+            n: 0_f64,
+            null_n: 0_f64,
+        })
+    }
+}
+
+impl<T: Float + Send + Sync> NullableContinuousDataDrift<T> {
+    /// Construct a new instance from a nullable baseline dataset. `None` and `Some(NaN)` values
+    /// are filtered out before bin edges are derived. The null fraction is recorded and returned
+    /// alongside each drift result.
+    ///
+    /// Returns [`DriftError::EmptyBaselineData`] if no non-null values remain after filtering,
+    /// or [`DriftError::NaNValueError`] if any `Some(NaN)` value is present.
+    pub fn new_from_baseline(
+        quantile_type: Option<QuantileType>,
+        bl_slice: &[Option<T>],
+    ) -> Result<NullableContinuousDataDrift<T>, DriftError> {
+        let baseline = NullableBaselineContinuousBins::new(bl_slice, quantile_type)?;
+        let rt_bins = vec![0_f64; baseline.baseline_hist.len()];
+        Ok(NullableContinuousDataDrift {
+            baseline,
+            rt_bins,
+            n: 0_f64,
+            null_n: 0_f64,
+        })
+    }
+
+    /// Compute drift between the baseline and the provided runtime dataset. `None` and `Some(NaN)`
+    /// values are treated as null and excluded from the drift computation. The null fraction of
+    /// the runtime slice is reported in the returned [`NullableDriftComputation`].
+    ///
+    /// Returns [`DriftError::EmptyRuntimeData`] if `runtime_data` is empty.
+    pub fn compute_drift(
+        &mut self,
+        runtime_data: &[Option<T>],
+        drift_type: ContinuousDriftType,
+    ) -> Result<NullableDriftComputation<ContinuousDriftType>, DriftError> {
+        self.build_rt_hist(runtime_data)?;
+        let null_percentage = self.null_n / self.n;
+        let drift = compute_drift_continuous(self, drift_type);
+        self.clear_rt();
+        Ok(NullableDriftComputation {
+            drift,
+            null_percentage,
+        })
+    }
+
+    /// Compute drift for multiple metrics in a single call. More efficient than calling
+    /// [`compute_drift`] in a loop as runtime binning is performed once.
+    ///
+    /// Returns [`DriftError::EmptyRuntimeData`] if `runtime_data` is empty.
+    ///
+    /// [`compute_drift`]: NullableContinuousDataDrift::compute_drift
+    pub fn compute_drift_multiple_criteria(
+        &mut self,
+        runtime_data: &[Option<T>],
+        drift_types: &[ContinuousDriftType],
+    ) -> Result<NullableDriftComputationMulti<ContinuousDriftType>, DriftError> {
+        self.build_rt_hist(runtime_data)?;
+        let null_percentage = self.null_n / self.n;
+        let drift = compute_drift_continuous_multi(self, drift_types);
+        self.clear_rt();
+        Ok(NullableDriftComputationMulti {
+            drift,
+            null_percentage,
+        })
+    }
+
+    /// Replace the baseline with a new dataset, preserving the original [`QuantileType`]. All
+    /// runtime bins are cleared.
+    ///
+    /// Returns [`DriftError::EmptyBaselineData`] if no non-null values remain after filtering.
+    pub fn reset_baseline(&mut self, baseline_slice: &[Option<T>]) -> Result<(), DriftError> {
+        self.baseline.reset(baseline_slice)?;
+        self.rt_bins = vec![0_f64; self.baseline.baseline_hist.len()];
+        Ok(())
+    }
+
+    #[inline]
+    fn build_rt_hist(&mut self, runtime_data: &[Option<T>]) -> Result<(), DriftError> {
+        if runtime_data.is_empty() {
+            return Err(DriftError::EmptyRuntimeData);
+        }
+        self.n = runtime_data.len() as f64;
+        let (bins, null_count) = compute_dataset_from_bins_continuous_null_parallel(
+            runtime_data,
+            &self.baseline.bin_edges,
+        );
+        self.null_n = null_count as f64;
+        self.rt_bins = bins;
+        Ok(())
+    }
+
+    fn clear_rt(&mut self) {
+        self.rt_bins.fill(0.);
+        self.n = 0_f64;
+        self.null_n = 0_f64;
+    }
+}
+
+impl<T: Float> NullableContinuousDataDrift<T> {
+    /// The number of histogram bins derived from the baseline dataset.
+    pub fn n_bins(&self) -> usize {
+        self.baseline.n_bins()
+    }
+
+    /// Export the baseline bin proportions. Each value represents the proportion of non-null
+    /// baseline samples that fell into the corresponding bin.
+    pub fn export_baseline(&self) -> Vec<f64> {
+        self.baseline.export_baseline()
+    }
+}
+
+impl<T: Float + serde::Serialize> NullableContinuousDataDrift<T> {
+    pub fn export_baseline_state(self) -> export::NullableContinuousDriftBaselineExport<T> {
         self.baseline.into()
     }
 }
@@ -233,20 +397,20 @@ pub struct StreamingContinuousDataDrift<T: Float, M> {
 }
 
 impl<T: Float, M> DriftContainer for StreamingContinuousDataDrift<T, M> {
-    fn get_baseline_hist(&self) -> &[f64] {
+    fn baseline_bins(&self) -> &[f64] {
         &self.baseline.baseline_hist
     }
 
-    fn get_runtime_bins(&self) -> &[f64] {
+    fn runtime_bins(&self) -> &[f64] {
         &self.stream_bins
     }
 
-    fn num_examples(&self) -> f64 {
+    fn runtime_sample_size(&self) -> f64 {
         self.total_stream_size
     }
 
-    fn container_type(&self) -> DriftContainerType {
-        DriftContainerType::Continuous
+    fn baseline_sample_size(&self) -> f64 {
+        self.baseline.population_size()
     }
 }
 
@@ -359,13 +523,13 @@ impl<T: Float> StreamingContinuousDataDrift<T, DecayModeMark> {
     /// [`compute_drift_multiple_criteria`]: StreamingContinuousDataDrift::compute_drift_multiple_criteria
     pub fn compute_drift(
         &mut self,
-        drift_type: DataDriftType,
-    ) -> Result<DriftComputation, DriftError> {
+        drift_type: ContinuousDriftType,
+    ) -> Result<DriftComputation<ContinuousDriftType>, DriftError> {
         if self.is_empty() {
             return Err(DriftError::EmptyRuntimeData);
         }
         self.apply_decay();
-        Ok(streaming_drift_single(self, drift_type))
+        Ok(compute_drift_continuous(self, drift_type))
     }
 
     /// Compute multiple drift metrics against the accumulated stream in a single call. Decay is
@@ -378,13 +542,13 @@ impl<T: Float> StreamingContinuousDataDrift<T, DecayModeMark> {
     /// [`compute_drift`]: StreamingContinuousDataDrift::compute_drift
     pub fn compute_drift_multiple_criteria(
         &mut self,
-        drift_types: &[DataDriftType],
-    ) -> Result<Vec<DriftComputation>, DriftError> {
+        drift_types: &[ContinuousDriftType],
+    ) -> Result<Vec<DriftComputation<ContinuousDriftType>>, DriftError> {
         if self.is_empty() {
             return Err(DriftError::EmptyRuntimeData);
         }
         self.apply_decay();
-        Ok(streaming_drift_multi(self, drift_types))
+        Ok(compute_drift_continuous_multi(self, drift_types))
     }
 
     fn apply_decay(&mut self) {
@@ -552,12 +716,12 @@ impl<T: Float> StreamingContinuousDataDrift<T, FlushModeMark> {
     /// [`compute_drift_multiple_criteria`]: StreamingContinuousDataDrift::compute_drift_multiple_criteria
     pub fn compute_drift(
         &mut self,
-        drift_type: DataDriftType,
-    ) -> Result<DriftComputation, DriftError> {
+        drift_type: ContinuousDriftType,
+    ) -> Result<DriftComputation<ContinuousDriftType>, DriftError> {
         if self.is_empty() {
             return Err(DriftError::EmptyRuntimeData);
         }
-        Ok(streaming_drift_single(self, drift_type))
+        Ok(compute_drift_continuous(self, drift_type))
     }
 
     /// Compute multiple drift metrics against the accumulated stream in a single call. Prefer
@@ -570,13 +734,13 @@ impl<T: Float> StreamingContinuousDataDrift<T, FlushModeMark> {
     /// [`compute_drift`]: StreamingContinuousDataDrift::compute_drift
     pub fn compute_drift_multiple_criteria(
         &mut self,
-        drift_types: &[DataDriftType],
-    ) -> Result<Vec<DriftComputation>, DriftError> {
+        drift_types: &[ContinuousDriftType],
+    ) -> Result<Vec<DriftComputation<ContinuousDriftType>>, DriftError> {
         if self.is_empty() {
             return Err(DriftError::EmptyRuntimeData);
         }
 
-        Ok(streaming_drift_multi(self, drift_types))
+        Ok(compute_drift_continuous_multi(self, drift_types))
     }
 
     /// Push a single example into the stream. A flush is triggered before the item is recorded
@@ -742,7 +906,7 @@ mod continuous_tests {
         let runtime = [1.0, 2.0, 3.0, 4.0];
 
         let drift = psi
-            .compute_drift(&runtime, DataDriftType::PopulationStabilityIndex)
+            .compute_drift(&runtime, ContinuousDriftType::PopulationStabilityIndex)
             .unwrap();
         assert!(drift.drift_magnitude.abs() < 1e-9);
     }
@@ -753,7 +917,7 @@ mod continuous_tests {
         let mut psi = ContinuousDataDrift::new_from_baseline(None, &baseline).unwrap();
         let runtime = [10.0, 11.0, 12.0, 13.0];
         let drift = psi
-            .compute_drift(&runtime, DataDriftType::PopulationStabilityIndex)
+            .compute_drift(&runtime, ContinuousDriftType::PopulationStabilityIndex)
             .unwrap();
         assert!(drift.drift_magnitude > 0.5);
     }
@@ -769,14 +933,14 @@ mod continuous_tests {
             .unwrap();
 
         let d1 = streaming
-            .compute_drift(DataDriftType::PopulationStabilityIndex)
+            .compute_drift(ContinuousDriftType::PopulationStabilityIndex)
             .unwrap();
         streaming
             .update_stream_batch(&[3.0, 4.0, 2.0, 2.0, 1.0, 3.0])
             .unwrap();
 
         let d2 = streaming
-            .compute_drift(DataDriftType::PopulationStabilityIndex)
+            .compute_drift(ContinuousDriftType::PopulationStabilityIndex)
             .unwrap();
 
         assert!(d1.drift_magnitude.abs() < 1e-9);
@@ -813,7 +977,7 @@ mod continuous_tests {
         let mut det =
             ContinuousDataDrift::new_from_baseline(None, &[1.0, 2.0, 3.0, 4.0, 5.0]).unwrap();
         assert!(
-            det.compute_drift(&[], DataDriftType::PopulationStabilityIndex)
+            det.compute_drift(&[], ContinuousDriftType::PopulationStabilityIndex)
                 .is_err()
         );
     }
@@ -832,7 +996,7 @@ mod continuous_tests {
             StreamingContinuousDataDrift::new_flush(&[1.0, 2.0, 3.0, 4.0, 5.0], None, None, None)
                 .unwrap();
         assert!(
-            s.compute_drift(DataDriftType::PopulationStabilityIndex)
+            s.compute_drift(ContinuousDriftType::PopulationStabilityIndex)
                 .is_err()
         );
     }
@@ -846,10 +1010,10 @@ mod continuous_tests {
         let mut det = ContinuousDataDrift::new_from_baseline(None, &baseline).unwrap();
 
         let d1 = det
-            .compute_drift(&runtime, DataDriftType::PopulationStabilityIndex)
+            .compute_drift(&runtime, ContinuousDriftType::PopulationStabilityIndex)
             .unwrap();
         let d2 = det
-            .compute_drift(&runtime, DataDriftType::PopulationStabilityIndex)
+            .compute_drift(&runtime, ContinuousDriftType::PopulationStabilityIndex)
             .unwrap();
         assert!((d1.drift_magnitude - d2.drift_magnitude).abs() < 1e-12);
     }
@@ -863,10 +1027,10 @@ mod continuous_tests {
         let mut det = ContinuousDataDrift::new_from_baseline(None, &baseline).unwrap();
 
         for drift_type in [
-            DataDriftType::PopulationStabilityIndex,
-            DataDriftType::KullbackLeibler,
-            DataDriftType::JensenShannon,
-            DataDriftType::WassersteinDistance,
+            ContinuousDriftType::PopulationStabilityIndex,
+            ContinuousDriftType::KullbackLeibler,
+            ContinuousDriftType::JensenShannon,
+            ContinuousDriftType::WassersteinDistance,
         ] {
             let v = det.compute_drift(&runtime, drift_type).unwrap();
             assert!(
@@ -962,7 +1126,7 @@ mod continuous_tests {
         )
         .unwrap();
         assert!(
-            s.compute_drift(DataDriftType::PopulationStabilityIndex)
+            s.compute_drift(ContinuousDriftType::PopulationStabilityIndex)
                 .is_err()
         );
     }
@@ -982,7 +1146,7 @@ mod continuous_tests {
         s.update_stream_batch(&data).unwrap();
         assert_eq!(s.total_samples(), 100);
 
-        s.compute_drift(DataDriftType::PopulationStabilityIndex)
+        s.compute_drift(ContinuousDriftType::PopulationStabilityIndex)
             .unwrap();
         assert!(s.total_samples() < 100);
     }
@@ -1002,9 +1166,9 @@ mod continuous_tests {
         s_multi.update_stream_batch(&data).unwrap();
         s_multi
             .compute_drift_multiple_criteria(&[
-                DataDriftType::PopulationStabilityIndex,
-                DataDriftType::KullbackLeibler,
-                DataDriftType::JensenShannon,
+                ContinuousDriftType::PopulationStabilityIndex,
+                ContinuousDriftType::KullbackLeibler,
+                ContinuousDriftType::JensenShannon,
             ])
             .unwrap();
         let samples_multi = s_multi.total_samples();
@@ -1014,7 +1178,7 @@ mod continuous_tests {
             StreamingContinuousDataDrift::new_decay(&baseline, Some(qt2), Some(half_life)).unwrap();
         s_single.update_stream_batch(&data).unwrap();
         s_single
-            .compute_drift(DataDriftType::PopulationStabilityIndex)
+            .compute_drift(ContinuousDriftType::PopulationStabilityIndex)
             .unwrap();
         let samples_single = s_single.total_samples();
 

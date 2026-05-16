@@ -124,6 +124,10 @@ impl<T: Hash + Ord + Clone> BaselineCategoricalBins<T> {
         }
     }
 
+    pub(crate) fn population_size(&self) -> f64 {
+        self.n
+    }
+
     /// Export the baseline histogram.
     pub(crate) fn export_baseline(&self) -> HashMap<T, f64> {
         self.idx_map
@@ -191,6 +195,10 @@ impl<T: Hash + Ord + Clone> NullableBaselineCategoricalBins<T> {
             total_n: baseline_data.len() as f64,
             null_n: null_count as f64,
         })
+    }
+
+    pub(crate) fn population_size(&self) -> f64 {
+        self.total_n - self.null_n
     }
 
     pub(crate) fn get_baseline_hist(&self) -> &[f64] {

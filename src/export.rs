@@ -1,6 +1,6 @@
 use crate::{
     core::distribution::QuantileType, core::error::DriftExportError,
-    drift_types::stream_mode::StreamingDriftMode,
+    drift::stream_mode::StreamingDriftMode,
 };
 use num_traits::Float;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -30,6 +30,7 @@ pub struct ContinuousDriftBaselineExport<T> {
     pub bin_edges: Vec<T>,
     pub baseline_hist: Vec<f64>,
     pub quantile_type: QuantileType,
+    pub sample_size: f64,
 }
 
 impl<T: Float + DeserializeOwned> LoadDataDriftExport for ContinuousDriftBaselineExport<T> {}
@@ -50,6 +51,17 @@ pub struct StreamingContinuousStatefulExport<T> {
 }
 
 impl<T: Float + DeserializeOwned> LoadDataDriftExport for StreamingContinuousStatefulExport<T> {}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct NullableContinuousDriftBaselineExport<T> {
+    pub bin_edges: Vec<T>,
+    pub baseline_hist: Vec<f64>,
+    pub quantile_type: QuantileType,
+    pub sample_size: f64,
+    pub null_n: f64,
+}
+
+impl<T: Float + DeserializeOwned> LoadDataDriftExport for NullableContinuousDriftBaselineExport<T> {}
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct CategoricalDriftBaselineExport {
