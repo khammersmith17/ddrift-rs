@@ -113,8 +113,8 @@ pub struct NullableStreamingCategoricalStatefulExport {
     pub stream_bins: Vec<f64>,
     pub baseline: NullableCategoricalDriftBaselineExport,
     pub stream_mode: StreamingDriftMode,
-    pub total_n: f64,
-    pub null_n: f64,
+    pub total_samples: f64,
+    pub null_samples: f64,
 }
 
 impl LoadDataDriftExport for NullableStreamingCategoricalStatefulExport {}

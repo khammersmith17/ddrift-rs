@@ -463,151 +463,6 @@ impl<T: Float + serde::de::DeserializeOwned> StreamingContinuousDataDrift<T, Dec
     }
 }
 
-impl<T: Float + Send + Sync> StreamingContinuousDataDrift<T, DecayModeMark> {
-    /// Construct a decay-mode stream. On each [`compute_drift`] or
-    /// [`compute_drift_multiple_criteria`] call, all bin counts and `total_stream_size` are
-    /// multiplied by α = 0.5^(1/`half_life`), where `half_life` is the number of seconds after
-    /// which a sample's weight is halved. Older data is continuously down-weighted rather than
-    /// discarded, giving a recency-weighted view of the distribution with no hard resets.
-    ///
-    /// `quantile_type` controls histogram bin count. See [`ContinuousDataDrift::new_from_baseline`]
-    /// for a full description of each option. Pass `None` to use [`FreedmanDiaconis`] (default).
-    ///
-    /// `half_life_opt`: decay half-life in seconds. A shorter half-life makes the signal more
-    /// sensitive to recent shifts at the cost of higher variance — older data loses influence
-    /// quickly. A longer half-life produces a smoother, more stable signal that responds slowly
-    /// to new patterns. Defaults to 86,400 (24 hours), meaning a sample's contribution is halved
-    /// after 24 hours worth of [`compute_drift`] calls.
-    ///
-    /// When computing multiple drift metrics on the same accumulated state, use
-    /// [`compute_drift_multiple_criteria`] — decay is applied once before all metrics are
-    /// evaluated. Calling [`compute_drift`] in a loop applies decay on each call.
-    ///
-    /// Returns [`DriftError::EmptyBaselineData`] if the baseline has fewer than 2 elements.
-    ///
-    /// [`FreedmanDiaconis`]: QuantileType::FreedmanDiaconis
-    /// [`compute_drift`]: StreamingContinuousDataDrift::compute_drift
-    /// [`compute_drift_multiple_criteria`]: StreamingContinuousDataDrift::compute_drift_multiple_criteria
-    pub fn new_decay(
-        baseline_data: &[T],
-        quantile_type: Option<QuantileType>,
-        half_life_opt: Option<NonZeroU64>,
-    ) -> Result<StreamingContinuousDataDrift<T, DecayModeMark>, DriftError> {
-        let baseline =
-            BaselineContinuousBins::new(baseline_data, quantile_type.unwrap_or_default())?;
-        let bl_hist_len = baseline.baseline_hist.len();
-        let stream_bins: Vec<f64> = vec![0_f64; bl_hist_len];
-        let half_life =
-            half_life_opt.unwrap_or(NonZeroU64::new(constants::DEFAULT_DECAY_HALF_LIFE).unwrap());
-        let mode = StreamModeInner::ExponentialDecay(0.5_f64.powf(1_f64 / half_life.get() as f64));
-
-        Ok(StreamingContinuousDataDrift {
-            stream_bins,
-            baseline,
-            total_stream_size: 0_f64,
-            mode,
-            _mark: PhantomData,
-        })
-    }
-}
-
-impl<T: Float> StreamingContinuousDataDrift<T, DecayModeMark> {
-    /// Compute drift between the accumulated stream and the baseline. Applies exponential decay
-    /// to all bin counts before computing, down-weighting older data by α = 0.5^(1/half_life).
-    ///
-    /// To compute multiple metrics on the same decayed state, use
-    /// [`compute_drift_multiple_criteria`] instead. Each call to this method applies decay once,
-    /// so calling it repeatedly for different metrics will compound the decay.
-    ///
-    /// Returns [`DriftError::EmptyRuntimeData`] if no data has been accumulated.
-    ///
-    /// [`compute_drift_multiple_criteria`]: StreamingContinuousDataDrift::compute_drift_multiple_criteria
-    pub fn compute_drift(
-        &mut self,
-        drift_type: ContinuousDriftType,
-    ) -> Result<DriftComputation<ContinuousDriftType>, DriftError> {
-        if self.is_empty() {
-            return Err(DriftError::EmptyRuntimeData);
-        }
-        self.apply_decay();
-        Ok(compute_drift_continuous(self, drift_type))
-    }
-
-    /// Compute multiple drift metrics against the accumulated stream in a single call. Decay is
-    /// applied once before all metrics are evaluated, ensuring all results reflect the same
-    /// decayed state. Prefer this over calling [`compute_drift`] in a loop when multiple metrics
-    /// are needed simultaneously.
-    ///
-    /// Returns [`DriftError::EmptyRuntimeData`] if no data has been accumulated.
-    ///
-    /// [`compute_drift`]: StreamingContinuousDataDrift::compute_drift
-    pub fn compute_drift_multiple_criteria(
-        &mut self,
-        drift_types: &[ContinuousDriftType],
-    ) -> Result<Vec<DriftComputation<ContinuousDriftType>>, DriftError> {
-        if self.is_empty() {
-            return Err(DriftError::EmptyRuntimeData);
-        }
-        self.apply_decay();
-        Ok(compute_drift_continuous_multi(self, drift_types))
-    }
-
-    fn apply_decay(&mut self) {
-        let StreamModeInner::ExponentialDecay(decay_factor) = self.mode else {
-            unreachable!()
-        };
-        for bin in self.stream_bins.iter_mut() {
-            *bin = (*bin * decay_factor).floor();
-        }
-        self.total_stream_size = (self.total_stream_size * decay_factor).floor();
-    }
-
-    /// Push a single example into the stream.
-    #[inline]
-    pub fn update_stream(&mut self, runtime_example: T) {
-        let idx = self.baseline.resolve_bin(runtime_example);
-
-        self.stream_bins[idx] += 1_f64;
-        self.total_stream_size += 1_f64;
-    }
-
-    /// Push a batch of examples into the stream.
-    ///
-    /// Returns [`DriftError::EmptyRuntimeData`] if the slice is empty.
-    pub fn update_stream_batch(&mut self, runtime_slice: &[T]) -> Result<(), DriftError> {
-        if runtime_slice.is_empty() {
-            return Err(DriftError::EmptyRuntimeData);
-        }
-
-        for item in runtime_slice {
-            self.update_stream(*item)
-        }
-
-        Ok(())
-    }
-}
-
-impl<T: Float + serde::Serialize> StreamingContinuousDataDrift<T, DecayModeMark> {
-    pub fn export_baseline_state(self) -> export::StreamingContinuousBaseExport<T> {
-        let baseline: export::ContinuousDriftBaselineExport<T> = self.baseline.into();
-
-        export::StreamingContinuousBaseExport {
-            baseline,
-            stream_mode: self.mode.into(),
-        }
-    }
-
-    pub fn export_stream_state(self) -> export::StreamingContinuousStatefulExport<T> {
-        let baseline: export::ContinuousDriftBaselineExport<T> = self.baseline.into();
-
-        export::StreamingContinuousStatefulExport {
-            baseline,
-            stream_bins: self.stream_bins,
-            stream_mode: self.mode.into(),
-        }
-    }
-}
-
 impl<T: Float + serde::de::DeserializeOwned> StreamingContinuousDataDrift<T, FlushModeMark> {
     pub fn new_from_base_export(
         export: export::StreamingContinuousBaseExport<T>,
@@ -649,6 +504,75 @@ impl<T: Float + serde::de::DeserializeOwned> StreamingContinuousDataDrift<T, Flu
         Ok(StreamingContinuousDataDrift {
             baseline,
             stream_bins,
+            total_stream_size: 0_f64,
+            mode,
+            _mark: PhantomData,
+        })
+    }
+}
+
+impl<T: Float + serde::Serialize, M: StreamingDataDriftMark> StreamingContinuousDataDrift<T, M> {
+    pub fn export_baseline_state(self) -> export::StreamingContinuousBaseExport<T> {
+        let baseline: export::ContinuousDriftBaselineExport<T> = self.baseline.into();
+
+        export::StreamingContinuousBaseExport {
+            baseline,
+            stream_mode: self.mode.into(),
+        }
+    }
+
+    pub fn export_stream_state(self) -> export::StreamingContinuousStatefulExport<T> {
+        let baseline: export::ContinuousDriftBaselineExport<T> = self.baseline.into();
+
+        export::StreamingContinuousStatefulExport {
+            baseline,
+            stream_bins: self.stream_bins,
+            stream_mode: self.mode.into(),
+        }
+    }
+}
+
+impl<T: Float + Send + Sync> StreamingContinuousDataDrift<T, DecayModeMark> {
+    /// Construct a decay-mode stream. On each [`compute_drift`] or
+    /// [`compute_drift_multiple_criteria`] call, all bin counts and `total_stream_size` are
+    /// multiplied by α = 0.5^(1/`half_life`), where `half_life` is the number of seconds after
+    /// which a sample's weight is halved. Older data is continuously down-weighted rather than
+    /// discarded, giving a recency-weighted view of the distribution with no hard resets.
+    ///
+    /// `quantile_type` controls histogram bin count. See [`ContinuousDataDrift::new_from_baseline`]
+    /// for a full description of each option. Pass `None` to use [`FreedmanDiaconis`] (default).
+    ///
+    /// `half_life_opt`: decay half-life in seconds. A shorter half-life makes the signal more
+    /// sensitive to recent shifts at the cost of higher variance — older data loses influence
+    /// quickly. A longer half-life produces a smoother, more stable signal that responds slowly
+    /// to new patterns. Defaults to 86,400 (24 hours), meaning a sample's contribution is halved
+    /// after 24 hours worth of [`compute_drift`] calls.
+    ///
+    /// When computing multiple drift metrics on the same accumulated state, use
+    /// [`compute_drift_multiple_criteria`] — decay is applied once before all metrics are
+    /// evaluated. Calling [`compute_drift`] in a loop applies decay on each call.
+    ///
+    /// Returns [`DriftError::EmptyBaselineData`] if the baseline has fewer than 2 elements.
+    ///
+    /// [`FreedmanDiaconis`]: QuantileType::FreedmanDiaconis
+    /// [`compute_drift`]: StreamingContinuousDataDrift::compute_drift
+    /// [`compute_drift_multiple_criteria`]: StreamingContinuousDataDrift::compute_drift_multiple_criteria
+    pub fn new_decay(
+        baseline_data: &[T],
+        quantile_type: Option<QuantileType>,
+        half_life_opt: Option<NonZeroU64>,
+    ) -> Result<StreamingContinuousDataDrift<T, DecayModeMark>, DriftError> {
+        let baseline =
+            BaselineContinuousBins::new(baseline_data, quantile_type.unwrap_or_default())?;
+        let bl_hist_len = baseline.baseline_hist.len();
+        let stream_bins: Vec<f64> = vec![0_f64; bl_hist_len];
+        let half_life =
+            half_life_opt.unwrap_or(NonZeroU64::new(constants::DEFAULT_DECAY_HALF_LIFE).unwrap());
+        let mode = StreamModeInner::ExponentialDecay(0.5_f64.powf(1_f64 / half_life.get() as f64));
+
+        Ok(StreamingContinuousDataDrift {
+            stream_bins,
+            baseline,
             total_stream_size: 0_f64,
             mode,
             _mark: PhantomData,
@@ -706,15 +630,19 @@ impl<T: Float + Send + Sync> StreamingContinuousDataDrift<T, FlushModeMark> {
 }
 
 impl<T: Float> StreamingContinuousDataDrift<T, FlushModeMark> {
-    /// Compute drift between the accumulated stream and the baseline.
-    ///
-    /// To compute multiple metrics on the same accumulated state, use
-    /// [`compute_drift_multiple_criteria`] instead.
-    ///
-    /// Returns [`DriftError::EmptyRuntimeData`] if no data has been accumulated since the last
-    /// flush.
-    ///
-    /// [`compute_drift_multiple_criteria`]: StreamingContinuousDataDrift::compute_drift_multiple_criteria
+    pub fn flush(&mut self) {
+        self.mode
+            .perform_flush(&mut self.stream_bins, &mut self.total_stream_size);
+    }
+
+    /// Returns the number of seconds elapsed since the last flush.
+    pub fn last_flush(&self) -> u64 {
+        self.mode.last_flush()
+    }
+}
+
+#[allow(private_bounds)]
+impl<T: Float, M: StreamingDataDriftMark> StreamingContinuousDataDrift<T, M> {
     pub fn compute_drift(
         &mut self,
         drift_type: ContinuousDriftType,
@@ -722,17 +650,11 @@ impl<T: Float> StreamingContinuousDataDrift<T, FlushModeMark> {
         if self.is_empty() {
             return Err(DriftError::EmptyRuntimeData);
         }
+        self.mode
+            .apply_decay(&mut self.stream_bins, &mut self.total_stream_size);
         Ok(compute_drift_continuous(self, drift_type))
     }
 
-    /// Compute multiple drift metrics against the accumulated stream in a single call. Prefer
-    /// this over calling [`compute_drift`] in a loop when multiple metrics are needed
-    /// simultaneously.
-    ///
-    /// Returns [`DriftError::EmptyRuntimeData`] if no data has been accumulated since the last
-    /// flush.
-    ///
-    /// [`compute_drift`]: StreamingContinuousDataDrift::compute_drift
     pub fn compute_drift_multiple_criteria(
         &mut self,
         drift_types: &[ContinuousDriftType],
@@ -741,19 +663,25 @@ impl<T: Float> StreamingContinuousDataDrift<T, FlushModeMark> {
             return Err(DriftError::EmptyRuntimeData);
         }
 
+        self.mode
+            .apply_decay(&mut self.stream_bins, &mut self.total_stream_size);
+
         Ok(compute_drift_continuous_multi(self, drift_types))
     }
 
-    /// Push a single example into the stream. A flush is triggered before the item is recorded
-    /// if the flush size or cadence threshold has been reached, starting a fresh window.
     #[inline]
-    pub fn update_stream(&mut self, runtime_example: T) {
+    fn inner_update_stream(&mut self, runtime_example: T) {
         let idx = self.baseline.resolve_bin(runtime_example);
-        if self.mode.needs_flush(self.total_stream_size) {
-            self.flush()
-        }
         self.stream_bins[idx] += 1_f64;
         self.total_stream_size += 1_f64;
+    }
+
+    pub fn update_stream(&mut self, runtime_example: T) {
+        if self.mode.needs_flush(self.total_stream_size) {
+            self.mode
+                .perform_flush(&mut self.stream_bins, &mut self.total_stream_size)
+        }
+        self.inner_update_stream(runtime_example)
     }
 
     /// Push a batch of examples into the stream. Each item is checked against flush thresholds
@@ -764,49 +692,20 @@ impl<T: Float> StreamingContinuousDataDrift<T, FlushModeMark> {
         if runtime_slice.is_empty() {
             return Err(DriftError::EmptyRuntimeData);
         }
+        if self
+            .mode
+            .needs_flush(self.total_stream_size + constants::FLUSH_CHECK_OFFSET as f64)
+        {
+            self.mode
+                .perform_flush(&mut self.stream_bins, &mut self.total_stream_size)
+        }
         runtime_slice
             .iter()
-            .for_each(|item| self.update_stream(*item));
+            .for_each(|item| self.inner_update_stream(*item));
 
         Ok(())
     }
 
-    /// Manually flush the stream, clearing all accumulated runtime data. The baseline is not
-    /// affected. The flush timestamp is reset so the cadence timer restarts from this point.
-    pub fn flush(&mut self) {
-        self.flush_runtime_stream();
-        self.mode.perform_flush();
-    }
-
-    /// Returns the number of seconds elapsed since the last flush.
-    pub fn last_flush(&self) -> u64 {
-        self.mode.last_flush()
-    }
-}
-
-impl<T: Float + serde::Serialize> StreamingContinuousDataDrift<T, FlushModeMark> {
-    pub fn export_baseline_state(self) -> export::StreamingContinuousBaseExport<T> {
-        let baseline: export::ContinuousDriftBaselineExport<T> = self.baseline.into();
-
-        export::StreamingContinuousBaseExport {
-            baseline,
-            stream_mode: self.mode.into(),
-        }
-    }
-
-    pub fn export_stream_state(self) -> export::StreamingContinuousStatefulExport<T> {
-        let baseline: export::ContinuousDriftBaselineExport<T> = self.baseline.into();
-
-        export::StreamingContinuousStatefulExport {
-            baseline,
-            stream_bins: self.stream_bins,
-            stream_mode: self.mode.into(),
-        }
-    }
-}
-
-#[allow(private_bounds)]
-impl<T: Float, M: StreamingDataDriftMark> StreamingContinuousDataDrift<T, M> {
     /// Returns `true` if no data has been accumulated since construction or the last flush.
     pub fn is_empty(&self) -> bool {
         self.stream_bins.iter().sum::<f64>() == 0_f64
@@ -861,12 +760,6 @@ impl<T: Float, M: StreamingDataDriftMark> StreamingContinuousDataDrift<T, M> {
     pub fn export_baseline(&self) -> Vec<f64> {
         self.baseline.export_baseline()
     }
-
-    // zero out all bins
-    fn flush_runtime_stream(&mut self) {
-        self.stream_bins.fill(0_f64);
-        self.total_stream_size = 0_f64;
-    }
 }
 
 #[allow(private_bounds)]
@@ -880,7 +773,7 @@ impl<T: Float + Send + Sync, M: StreamingDataDriftMark> StreamingContinuousDataD
         self.baseline.reset(baseline_slice)?;
         self.stream_bins = vec![0_f64; self.baseline.baseline_hist.len()];
         self.total_stream_size = 0_f64;
-        self.mode.perform_flush();
+        self.mode.touch_flush_ts();
         Ok(())
     }
 }

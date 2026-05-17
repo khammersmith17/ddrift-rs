@@ -58,10 +58,22 @@ impl From<StreamingDriftMode> for StreamModeInner {
 }
 
 impl StreamModeInner {
-    /// Resets state on flush.
-    pub(crate) fn perform_flush(&mut self) {
+    #[inline]
+    pub(crate) fn touch_flush_ts(&mut self) {
         match self {
             StreamModeInner::Flush { last_flush_ts, .. } => {
+                *last_flush_ts = Instant::now();
+            }
+            _ => {}
+        }
+    }
+    /// Resets state on flush.
+    #[inline]
+    pub(crate) fn perform_flush(&mut self, bins: &mut [f64], n: &mut f64) {
+        match self {
+            StreamModeInner::Flush { last_flush_ts, .. } => {
+                bins.fill(0_f64);
+                *n = 0_f64;
                 *last_flush_ts = Instant::now();
             }
             _ => {}
@@ -70,6 +82,7 @@ impl StreamModeInner {
 
     /// Determine if a flush is needed. When mode is using ExponentialDecay, this should be
     /// compiled out in release mode.
+    #[inline]
     pub(crate) fn needs_flush(&self, total_stream_size: f64) -> bool {
         match self {
             StreamModeInner::Flush {
@@ -77,12 +90,11 @@ impl StreamModeInner {
                 cadence,
                 last_flush_ts,
             } => {
-                // First check size.
-                // If size is valid, mask the Instant check to only check every 255
-                // This introduces small error and amortizes the Instant check. Instant check is
-                // non trivial expensive.
+                // Always flush on size.
+                // If not size, amortize the time check every 255 items.
+                // Will only check size when least signifcant byte is full.
                 total_stream_size >= *size
-                    || (total_stream_size as usize & 255 == 0
+                    || (total_stream_size as usize & constants::FLUSH_CHECK_OFFSET == 0
                         && Instant::now().duration_since(*last_flush_ts) >= *cadence)
             }
             StreamModeInner::ExponentialDecay(_) => false,
@@ -90,12 +102,41 @@ impl StreamModeInner {
     }
 
     /// Fetch the number of seconds since last flush.
+    #[inline]
     pub(crate) fn last_flush(&self) -> u64 {
         match self {
             StreamModeInner::Flush { last_flush_ts, .. } => {
                 Instant::now().duration_since(*last_flush_ts).as_secs()
             }
             StreamModeInner::ExponentialDecay(_) => u64::default(),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn apply_decay(&self, bins: &mut [f64], n: &mut f64) {
+        match self {
+            StreamModeInner::ExponentialDecay(decay_factor) => {
+                bins.iter_mut().for_each(|b| *b *= decay_factor);
+                *n *= decay_factor
+            }
+            _ => {}
+        }
+    }
+
+    #[inline]
+    pub(crate) fn apply_nullable_decay(
+        &self,
+        bins: &mut [f64],
+        total_n: &mut f64,
+        null_n: &mut f64,
+    ) {
+        match self {
+            StreamModeInner::ExponentialDecay(decay_factor) => {
+                bins.iter_mut().for_each(|b| *b *= decay_factor);
+                *total_n *= decay_factor;
+                *null_n *= decay_factor;
+            }
+            _ => {}
         }
     }
 }

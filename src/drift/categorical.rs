@@ -139,7 +139,7 @@ pub struct NullableStreamingCategoricalDataDrift<T: Hash + Ord + Clone, M> {
     baseline: NullableBaselineCategoricalBins<T>,
     stream_bins: Vec<f64>,
     total_stream_size: f64,
-    null_n: f64,
+    null_count: f64,
     mode: StreamModeInner,
     _mark: PhantomData<M>,
 }
@@ -154,7 +154,7 @@ impl<T: Hash + Ord + Clone, M> DriftContainer for NullableStreamingCategoricalDa
     }
 
     fn runtime_sample_size(&self) -> f64 {
-        self.total_stream_size - self.null_n
+        self.total_stream_size - self.null_count
     }
 
     fn baseline_sample_size(&self) -> f64 {
@@ -198,89 +198,18 @@ impl<T: Hash + Ord + Clone> NullableStreamingCategoricalDataDrift<T, FlushModeMa
             stream_bins,
             baseline,
             total_stream_size: 0_f64,
-            null_n: 0_f64,
+            null_count: 0_f64,
             mode,
             _mark: PhantomData,
         })
-    }
-
-    /// Compute drift between the accumulated stream and the baseline.
-    ///
-    /// To compute multiple metrics on the same accumulated state, use
-    /// [`compute_drift_multiple_criteria`] instead.
-    ///
-    /// Returns [`DriftError::EmptyRuntimeData`] if no data has been accumulated since the last
-    /// flush.
-    ///
-    /// [`compute_drift_multiple_criteria`]: StreamingCategoricalDataDrift::compute_drift_multiple_criteria
-    pub fn compute_drift(
-        &mut self,
-        drift_type: CategoricalDriftType,
-    ) -> Result<NullableDriftComputation<CategoricalDriftType>, DriftError> {
-        if self.is_empty() {
-            return Err(DriftError::EmptyRuntimeData);
-        }
-        Ok(NullableDriftComputation {
-            drift: compute_drift_categorical(self, drift_type),
-            null_percentage: self.null_n / self.total_stream_size,
-        })
-    }
-
-    /// Compute multiple drift metrics against the accumulated stream in a single call. Prefer
-    /// this over calling [`compute_drift`] in a loop when multiple metrics are needed
-    /// simultaneously.
-    ///
-    /// Returns [`DriftError::EmptyRuntimeData`] if no data has been accumulated since the last
-    /// flush.
-    ///
-    /// [`compute_drift`]: StreamingCategoricalDataDrift::compute_drift
-    pub fn compute_drift_multiple_criteria(
-        &mut self,
-        drift_types: &[CategoricalDriftType],
-    ) -> Result<NullableDriftComputationMulti<CategoricalDriftType>, DriftError> {
-        if self.is_empty() {
-            return Err(DriftError::EmptyRuntimeData);
-        }
-
-        Ok(NullableDriftComputationMulti {
-            drift: compute_drift_categorical_multi(self, drift_types),
-            null_percentage: self.null_n / self.total_stream_size,
-        })
-    }
-
-    /// Push a single label into the stream. A flush is triggered before the item is recorded
-    /// if the flush size or cadence threshold has been reached, starting a fresh window.
-    #[inline]
-    pub fn update_stream(&mut self, item: &Option<T>) {
-        if let Some(idx) = self.baseline.resolve_bin(item) {
-            if self.mode.needs_flush(self.total_stream_size) {
-                self.flush();
-            }
-            self.stream_bins[idx] += 1_f64;
-        } else {
-            self.null_n += 1_f64;
-        }
-        self.total_stream_size += 1_f64;
-    }
-
-    /// Push a batch of labels into the stream. Each item is checked against flush thresholds
-    /// individually, so a flush may occur mid-batch if the size threshold is crossed.
-    ///
-    /// Returns [`DriftError::EmptyRuntimeData`] if the slice is empty.
-    pub fn update_stream_batch(&mut self, runtime_data: &[Option<T>]) -> Result<(), DriftError> {
-        if runtime_data.is_empty() {
-            return Err(DriftError::EmptyRuntimeData);
-        }
-        runtime_data.iter().for_each(|cat| self.update_stream(cat));
-
-        Ok(())
     }
 
     /// Manually flush the stream, clearing all accumulated runtime data. The baseline is not
     /// affected. The flush timestamp is reset so the cadence timer restarts from this point.
     pub fn flush(&mut self) {
         self.flush_runtime_stream();
-        self.mode.perform_flush();
+        self.mode
+            .perform_flush(&mut self.stream_bins, &mut self.total_stream_size);
     }
 }
 
@@ -305,7 +234,7 @@ impl<T: Hash + Ord + Clone + serde::de::DeserializeOwned>
             baseline,
             stream_bins: vec![0_f64; n_bins],
             total_stream_size: 0_f64,
-            null_n: 0_f64,
+            null_count: 0_f64,
             mode,
             _mark: PhantomData,
         })
@@ -318,8 +247,8 @@ impl<T: Hash + Ord + Clone + serde::de::DeserializeOwned>
             baseline: baseline_export,
             stream_mode,
             stream_bins,
-            total_n,
-            null_n,
+            total_samples,
+            null_samples,
         } = export;
         let mode: StreamModeInner = stream_mode.into();
         let baseline = NullableBaselineCategoricalBins::new_from_export(baseline_export)?;
@@ -330,37 +259,10 @@ impl<T: Hash + Ord + Clone + serde::de::DeserializeOwned>
         Ok(NullableStreamingCategoricalDataDrift {
             baseline,
             stream_bins,
-            total_stream_size: total_n,
-            null_n,
+            total_stream_size: total_samples,
+            null_count: null_samples,
             mode,
             _mark: PhantomData,
-        })
-    }
-}
-
-impl<T: Hash + Ord + Clone + serde::Serialize>
-    NullableStreamingCategoricalDataDrift<T, FlushModeMark>
-{
-    pub fn export_baseline_state(
-        self,
-    ) -> Result<export::NullableStreamingCategoricalBaseExport, serde_json::Error> {
-        let baseline: export::NullableCategoricalDriftBaselineExport = self.baseline.try_into()?;
-        Ok(export::NullableStreamingCategoricalBaseExport {
-            baseline,
-            stream_mode: self.mode.into(),
-        })
-    }
-
-    pub fn export_stream_state(
-        self,
-    ) -> Result<export::NullableStreamingCategoricalStatefulExport, serde_json::Error> {
-        let baseline: export::NullableCategoricalDriftBaselineExport = self.baseline.try_into()?;
-        Ok(export::NullableStreamingCategoricalStatefulExport {
-            baseline,
-            stream_bins: self.stream_bins,
-            stream_mode: self.mode.into(),
-            total_n: self.total_stream_size,
-            null_n: self.null_n,
         })
     }
 }
@@ -386,7 +288,7 @@ impl<T: Hash + Ord + Clone + serde::de::DeserializeOwned>
             baseline,
             stream_bins: vec![0_f64; n_bins],
             total_stream_size: 0_f64,
-            null_n: 0_f64,
+            null_count: 0_f64,
             mode,
             _mark: PhantomData,
         })
@@ -399,8 +301,8 @@ impl<T: Hash + Ord + Clone + serde::de::DeserializeOwned>
             baseline: baseline_export,
             stream_mode,
             stream_bins,
-            total_n,
-            null_n,
+            total_samples,
+            null_samples,
         } = export;
         let mode: StreamModeInner = stream_mode.into();
         let baseline = NullableBaselineCategoricalBins::new_from_export(baseline_export)?;
@@ -411,16 +313,17 @@ impl<T: Hash + Ord + Clone + serde::de::DeserializeOwned>
         Ok(NullableStreamingCategoricalDataDrift {
             baseline,
             stream_bins,
-            total_stream_size: total_n,
-            null_n,
+            total_stream_size: total_samples,
+            null_count: null_samples,
             mode,
             _mark: PhantomData,
         })
     }
 }
 
-impl<T: Hash + Ord + Clone + serde::Serialize>
-    NullableStreamingCategoricalDataDrift<T, DecayModeMark>
+#[allow(private_bounds)]
+impl<T: Hash + Ord + Clone + serde::Serialize, M: StreamingDataDriftMark>
+    NullableStreamingCategoricalDataDrift<T, M>
 {
     pub fn export_baseline_state(
         self,
@@ -440,8 +343,8 @@ impl<T: Hash + Ord + Clone + serde::Serialize>
             baseline,
             stream_bins: self.stream_bins,
             stream_mode: self.mode.into(),
-            total_n: self.total_stream_size,
-            null_n: self.null_n,
+            total_samples: self.total_stream_size,
+            null_samples: self.null_count,
         })
     }
 }
@@ -482,22 +385,15 @@ impl<T: Hash + Ord + Clone> NullableStreamingCategoricalDataDrift<T, DecayModeMa
             stream_bins,
             baseline,
             total_stream_size: 0_f64,
-            null_n: 0_f64,
+            null_count: 0_f64,
             mode,
             _mark: PhantomData,
         })
     }
+}
 
-    /// Compute drift between the accumulated stream and the baseline. Applies exponential decay
-    /// to all bin counts before computing, down-weighting older data by α = 0.5^(1/half_life).
-    ///
-    /// To compute multiple metrics on the same decayed state, use
-    /// [`compute_drift_multiple_criteria`] instead. Each call to this method applies decay once,
-    /// so calling it repeatedly for different metrics will compound the decay.
-    ///
-    /// Returns [`DriftError::EmptyRuntimeData`] if no data has been accumulated.
-    ///
-    /// [`compute_drift_multiple_criteria`]: StreamingCategoricalDataDrift::compute_drift_multiple_criteria
+#[allow(private_bounds)]
+impl<T: Hash + Ord + Clone, M: StreamingDataDriftMark> NullableStreamingCategoricalDataDrift<T, M> {
     pub fn compute_drift(
         &mut self,
         drift_type: CategoricalDriftType,
@@ -505,21 +401,17 @@ impl<T: Hash + Ord + Clone> NullableStreamingCategoricalDataDrift<T, DecayModeMa
         if self.is_empty() {
             return Err(DriftError::EmptyRuntimeData);
         }
-        self.apply_decay();
+        self.mode.apply_nullable_decay(
+            &mut self.stream_bins,
+            &mut self.total_stream_size,
+            &mut self.null_count,
+        );
         Ok(NullableDriftComputation {
             drift: compute_drift_categorical(self, drift_type),
-            null_percentage: self.null_n / self.total_stream_size,
+            null_percentage: self.null_count / self.total_stream_size,
         })
     }
 
-    /// Compute multiple drift metrics against the accumulated stream in a single call. Decay is
-    /// applied once before all metrics are evaluated, ensuring all results reflect the same
-    /// decayed state. Prefer this over calling [`compute_drift`] in a loop when multiple metrics
-    /// are needed simultaneously.
-    ///
-    /// Returns [`DriftError::EmptyRuntimeData`] if no data has been accumulated.
-    ///
-    /// [`compute_drift`]: StreamingCategoricalDataDrift::compute_drift
     pub fn compute_drift_multiple_criteria(
         &mut self,
         drift_types: &[CategoricalDriftType],
@@ -527,22 +419,17 @@ impl<T: Hash + Ord + Clone> NullableStreamingCategoricalDataDrift<T, DecayModeMa
         if self.is_empty() {
             return Err(DriftError::EmptyRuntimeData);
         }
-        self.apply_decay();
+
+        self.mode.apply_nullable_decay(
+            &mut self.stream_bins,
+            &mut self.total_stream_size,
+            &mut self.null_count,
+        );
 
         Ok(NullableDriftComputationMulti {
             drift: compute_drift_categorical_multi(self, drift_types),
-            null_percentage: self.null_n / self.total_stream_size,
+            null_percentage: self.null_count / self.total_stream_size,
         })
-    }
-
-    fn apply_decay(&mut self) {
-        let StreamModeInner::ExponentialDecay(decay_factor) = self.mode else {
-            unreachable!()
-        };
-        for bin in self.stream_bins.iter_mut() {
-            *bin = (*bin * decay_factor).floor();
-        }
-        self.total_stream_size = (self.total_stream_size * decay_factor).floor();
     }
 
     /// Push a single label into the stream.
@@ -551,7 +438,7 @@ impl<T: Hash + Ord + Clone> NullableStreamingCategoricalDataDrift<T, DecayModeMa
         if let Some(idx) = self.baseline.resolve_bin(item) {
             self.stream_bins[idx] += 1_f64;
         } else {
-            self.null_n += 1_f64;
+            self.null_count += 1_f64;
         }
 
         self.total_stream_size += 1_f64;
@@ -568,10 +455,7 @@ impl<T: Hash + Ord + Clone> NullableStreamingCategoricalDataDrift<T, DecayModeMa
 
         Ok(())
     }
-}
 
-#[allow(private_bounds)]
-impl<T: Hash + Ord + Clone, M: StreamingDataDriftMark> NullableStreamingCategoricalDataDrift<T, M> {
     /// Returns `true` if no data has been accumulated since construction or the last flush.
     pub fn is_empty(&self) -> bool {
         self.stream_bins.iter().sum::<f64>() == 0_f64
@@ -584,9 +468,9 @@ impl<T: Hash + Ord + Clone, M: StreamingDataDriftMark> NullableStreamingCategori
     /// Returns [`DriftError::EmptyBaselineData`] if `new_baseline` is empty.
     pub fn reset_baseline(&mut self, new_baseline: &[Option<T>]) -> Result<(), DriftError> {
         self.baseline.reset(new_baseline)?;
-        self.mode.perform_flush();
         self.init_stream_bins();
         self.total_stream_size = 0_f64;
+        self.mode.touch_flush_ts();
         Ok(())
     }
 
@@ -978,73 +862,12 @@ impl<T: Hash + Ord + Clone> StreamingCategoricalDataDrift<T, FlushModeMark> {
         })
     }
 
-    /// Compute drift between the accumulated stream and the baseline.
-    ///
-    /// To compute multiple metrics on the same accumulated state, use
-    /// [`compute_drift_multiple_criteria`] instead.
-    ///
-    /// Returns [`DriftError::EmptyRuntimeData`] if no data has been accumulated since the last
-    /// flush.
-    ///
-    /// [`compute_drift_multiple_criteria`]: StreamingCategoricalDataDrift::compute_drift_multiple_criteria
-    pub fn compute_drift(
-        &mut self,
-        drift_type: CategoricalDriftType,
-    ) -> Result<DriftComputation<CategoricalDriftType>, DriftError> {
-        if self.is_empty() {
-            return Err(DriftError::EmptyRuntimeData);
-        }
-        Ok(compute_drift_categorical(self, drift_type))
-    }
-
-    /// Compute multiple drift metrics against the accumulated stream in a single call. Prefer
-    /// this over calling [`compute_drift`] in a loop when multiple metrics are needed
-    /// simultaneously.
-    ///
-    /// Returns [`DriftError::EmptyRuntimeData`] if no data has been accumulated since the last
-    /// flush.
-    ///
-    /// [`compute_drift`]: StreamingCategoricalDataDrift::compute_drift
-    pub fn compute_drift_multiple_criteria(
-        &mut self,
-        drift_types: &[CategoricalDriftType],
-    ) -> Result<Vec<DriftComputation<CategoricalDriftType>>, DriftError> {
-        if self.is_empty() {
-            return Err(DriftError::EmptyRuntimeData);
-        }
-        Ok(compute_drift_categorical_multi(self, drift_types))
-    }
-
-    /// Push a single label into the stream. A flush is triggered before the item is recorded
-    /// if the flush size or cadence threshold has been reached, starting a fresh window.
-    #[inline]
-    pub fn update_stream(&mut self, item: &T) {
-        let idx = self.baseline.resolve_bin(item);
-        if self.mode.needs_flush(self.total_stream_size) {
-            self.flush();
-        }
-        self.stream_bins[idx] += 1_f64;
-        self.total_stream_size += 1_f64;
-    }
-
-    /// Push a batch of labels into the stream. Each item is checked against flush thresholds
-    /// individually, so a flush may occur mid-batch if the size threshold is crossed.
-    ///
-    /// Returns [`DriftError::EmptyRuntimeData`] if the slice is empty.
-    pub fn update_stream_batch(&mut self, runtime_data: &[T]) -> Result<(), DriftError> {
-        if runtime_data.is_empty() {
-            return Err(DriftError::EmptyRuntimeData);
-        }
-        runtime_data.iter().for_each(|cat| self.update_stream(cat));
-
-        Ok(())
-    }
-
     /// Manually flush the stream, clearing all accumulated runtime data. The baseline is not
     /// affected. The flush timestamp is reset so the cadence timer restarts from this point.
     pub fn flush(&mut self) {
         self.flush_runtime_stream();
-        self.mode.perform_flush();
+        self.mode
+            .perform_flush(&mut self.stream_bins, &mut self.total_stream_size);
     }
 }
 
@@ -1238,17 +1061,10 @@ impl<T: Hash + Ord + Clone> StreamingCategoricalDataDrift<T, DecayModeMark> {
             _mark: PhantomData,
         })
     }
+}
 
-    /// Compute drift between the accumulated stream and the baseline. Applies exponential decay
-    /// to all bin counts before computing, down-weighting older data by α = 0.5^(1/half_life).
-    ///
-    /// To compute multiple metrics on the same decayed state, use
-    /// [`compute_drift_multiple_criteria`] instead. Each call to this method applies decay once,
-    /// so calling it repeatedly for different metrics will compound the decay.
-    ///
-    /// Returns [`DriftError::EmptyRuntimeData`] if no data has been accumulated.
-    ///
-    /// [`compute_drift_multiple_criteria`]: StreamingCategoricalDataDrift::compute_drift_multiple_criteria
+#[allow(private_bounds)]
+impl<T: Hash + Ord + Clone, M: StreamingDataDriftMark> StreamingCategoricalDataDrift<T, M> {
     pub fn compute_drift(
         &mut self,
         drift_type: CategoricalDriftType,
@@ -1256,18 +1072,12 @@ impl<T: Hash + Ord + Clone> StreamingCategoricalDataDrift<T, DecayModeMark> {
         if self.is_empty() {
             return Err(DriftError::EmptyRuntimeData);
         }
-        self.apply_decay();
+        self.mode
+            .apply_decay(&mut self.stream_bins, &mut self.total_stream_size);
+
         Ok(compute_drift_categorical(self, drift_type))
     }
 
-    /// Compute multiple drift metrics against the accumulated stream in a single call. Decay is
-    /// applied once before all metrics are evaluated, ensuring all results reflect the same
-    /// decayed state. Prefer this over calling [`compute_drift`] in a loop when multiple metrics
-    /// are needed simultaneously.
-    ///
-    /// Returns [`DriftError::EmptyRuntimeData`] if no data has been accumulated.
-    ///
-    /// [`compute_drift`]: StreamingCategoricalDataDrift::compute_drift
     pub fn compute_drift_multiple_criteria(
         &mut self,
         drift_types: &[CategoricalDriftType],
@@ -1275,43 +1085,45 @@ impl<T: Hash + Ord + Clone> StreamingCategoricalDataDrift<T, DecayModeMark> {
         if self.is_empty() {
             return Err(DriftError::EmptyRuntimeData);
         }
-        self.apply_decay();
+        self.mode
+            .apply_decay(&mut self.stream_bins, &mut self.total_stream_size);
         Ok(compute_drift_categorical_multi(self, drift_types))
     }
 
-    fn apply_decay(&mut self) {
-        let StreamModeInner::ExponentialDecay(decay_factor) = self.mode else {
-            unreachable!()
-        };
-        for bin in self.stream_bins.iter_mut() {
-            *bin = (*bin * decay_factor).floor();
+    fn check_flush(&mut self) {
+        if self
+            .mode
+            .needs_flush(self.total_stream_size + constants::FLUSH_CHECK_OFFSET as f64)
+        {
+            self.mode
+                .perform_flush(&mut self.stream_bins, &mut self.total_stream_size)
         }
-        self.total_stream_size = (self.total_stream_size * decay_factor).floor();
     }
 
-    /// Push a single label into the stream.
     #[inline]
-    pub fn update_stream(&mut self, item: &T) {
-        let idx = self.baseline.resolve_bin(item);
+    fn inner_update_stream(&mut self, example: &T) {
+        let idx = self.baseline.resolve_bin(example);
         self.stream_bins[idx] += 1_f64;
         self.total_stream_size += 1_f64;
     }
 
-    /// Push a batch of labels into the stream.
-    ///
-    /// Returns [`DriftError::EmptyRuntimeData`] if the slice is empty.
+    pub fn update_stream(&mut self, example: &T) {
+        self.check_flush();
+        self.inner_update_stream(example);
+    }
+
     pub fn update_stream_batch(&mut self, runtime_data: &[T]) -> Result<(), DriftError> {
         if runtime_data.is_empty() {
             return Err(DriftError::EmptyRuntimeData);
         }
-        runtime_data.iter().for_each(|cat| self.update_stream(cat));
+
+        self.check_flush();
+        runtime_data
+            .iter()
+            .for_each(|cat| self.inner_update_stream(cat));
 
         Ok(())
     }
-}
-
-#[allow(private_bounds)]
-impl<T: Hash + Ord + Clone, M: StreamingDataDriftMark> StreamingCategoricalDataDrift<T, M> {
     /// Returns `true` if no data has been accumulated since construction or the last flush.
     pub fn is_empty(&self) -> bool {
         self.stream_bins.iter().sum::<f64>() == 0_f64
@@ -1324,9 +1136,9 @@ impl<T: Hash + Ord + Clone, M: StreamingDataDriftMark> StreamingCategoricalDataD
     /// Returns [`DriftError::EmptyBaselineData`] if `new_baseline` is empty.
     pub fn reset_baseline(&mut self, new_baseline: &[T]) -> Result<(), DriftError> {
         self.baseline.reset(new_baseline)?;
-        self.mode.perform_flush();
         self.init_stream_bins();
         self.total_stream_size = 0_f64;
+        self.mode.touch_flush_ts();
         Ok(())
     }
 
