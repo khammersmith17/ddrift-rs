@@ -9,7 +9,10 @@ use core::{
     drift_metrics::{CategoricalDriftType, ContinuousDriftType},
     error::DriftError,
 };
-use drift::{DriftComputation, categorical::CategoricalDataDrift, continuous::ContinuousDataDrift};
+use drift::{
+    DriftComputation,
+    discrete::{categorical::CategoricalDataDrift, continuous::ContinuousDataDrift},
+};
 use num_traits::Float;
 use std::hash::Hash;
 

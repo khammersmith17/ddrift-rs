@@ -54,15 +54,19 @@ fn sort_baseline_data<T: Float>(data: &[T]) -> Result<Vec<T>, DriftError> {
 #[derive(Clone, Debug)]
 pub(crate) struct NullableBaselineContinuousBins<T: Float> {
     bin_edges: NullableContinuousBinEdges<T>,
-    pub baseline_hist: Vec<f64>,
+    baseline_hist: Vec<f64>,
     quantile_type: QuantileType,
     sample_size: f64,
-    null_n: f64,
+    null_count: f64,
 }
 
 impl<T: Float> NullableBaselineContinuousBins<T> {
     pub(crate) fn bin_edges(&self) -> &ContinuousBinEdges<T> {
         self.bin_edges.inner_ref()
+    }
+
+    pub(crate) fn baseline_bins(&self) -> &[f64] {
+        &self.baseline_hist
     }
 
     pub(crate) fn n_bins(&self) -> usize {
@@ -85,7 +89,7 @@ impl<T: Float> NullableBaselineContinuousBins<T> {
 
     /// Non-none population size.
     pub(crate) fn population_size(&self) -> f64 {
-        self.sample_size - self.null_n
+        self.sample_size - self.null_count
     }
 }
 
@@ -96,7 +100,7 @@ impl<T: Float + Send + Sync> NullableBaselineContinuousBins<T> {
     ) -> Result<NullableBaselineContinuousBins<T>, DriftError> {
         let sample_size = baseline_data.len() as f64;
         let quantile_type = quantile_type_opt.unwrap_or_default();
-        let (sorted_baseline, null_n) = sort_baseline_data_opt(baseline_data)?;
+        let (sorted_baseline, null_count) = sort_baseline_data_opt(baseline_data)?;
         let bin_edges_inner: ContinuousBinEdges<T> =
             ContinuousBinEdges::new_from_dataset_with_quantile_type(
                 &sorted_baseline,
@@ -112,7 +116,7 @@ impl<T: Float + Send + Sync> NullableBaselineContinuousBins<T> {
             baseline_hist,
             quantile_type,
             sample_size,
-            null_n: null_n as f64,
+            null_count: null_count as f64,
         })
     }
 
@@ -132,7 +136,7 @@ impl<T: Float + serde::de::DeserializeOwned> TryFrom<NullableContinuousDriftBase
             bin_edges: raw_bin_edges,
             baseline_hist,
             quantile_type,
-            null_n,
+            null_count,
             sample_size,
         } = export;
         let n_bins = baseline_hist.len();
@@ -146,7 +150,7 @@ impl<T: Float + serde::de::DeserializeOwned> TryFrom<NullableContinuousDriftBase
             bin_edges,
             baseline_hist,
             quantile_type,
-            null_n,
+            null_count,
             sample_size,
         })
     }
@@ -160,7 +164,7 @@ impl<T: Float + serde::Serialize> From<NullableBaselineContinuousBins<T>>
             bin_edges: baseline.bin_edges.take_edges(),
             baseline_hist: baseline.baseline_hist,
             quantile_type: baseline.quantile_type,
-            null_n: baseline.null_n,
+            null_count: baseline.null_count,
             sample_size: baseline.sample_size,
         }
     }
@@ -179,8 +183,8 @@ impl<T: Float + serde::de::DeserializeOwned> NullableBaselineContinuousBins<T> {
 // Also allows for more elegant composition of different usage
 #[derive(Clone, Debug)]
 pub(crate) struct BaselineContinuousBins<T: Float> {
-    pub bin_edges: ContinuousBinEdges<T>,
-    pub baseline_hist: Vec<f64>,
+    bin_edges: ContinuousBinEdges<T>,
+    baseline_hist: Vec<f64>,
     sample_size: f64,
     quantile_type: QuantileType,
 }
@@ -244,8 +248,16 @@ impl<T: Float> BaselineContinuousBins<T> {
         self.bin_edges.n_bins()
     }
 
+    pub(crate) fn bin_edges(&self) -> &ContinuousBinEdges<T> {
+        &self.bin_edges
+    }
+
     pub fn export_bin_edges(&self) -> Vec<T> {
         self.bin_edges.export_edges()
+    }
+
+    pub fn baseline_bins(&self) -> &[f64] {
+        &self.baseline_hist
     }
 
     // Resolve the bin a particular data example falls into.

@@ -1,6 +1,6 @@
-pub mod categorical;
-pub mod continuous;
+pub mod discrete;
 pub mod stream_mode;
+pub mod streaming;
 
 /// Mode marker for streaming drift types that operate in flush mode. When parameterized with
 /// this marker, the stream accumulates data until either a sample size threshold or a time

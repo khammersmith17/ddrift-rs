@@ -1,12 +1,7 @@
-use super::{
-    DecayModeMark, DriftComputation, FlushModeMark, NullableDriftComputation,
-    NullableDriftComputationMulti, StreamingDataDriftMark, stream_mode::StreamModeInner,
-};
 use crate::{
     baseline::continuous::{BaselineContinuousBins, NullableBaselineContinuousBins},
     constants,
     core::{
-        compute_dataset_from_bins_continuous, compute_dataset_from_bins_continuous_null_parallel,
         distribution::QuantileType,
         drift_metrics::{
             ContinuousDriftType, DriftContainer, compute_drift_continuous,
@@ -14,8 +9,13 @@ use crate::{
         },
         error::{DriftError, DriftExportError},
     },
+    drift::{
+        DecayModeMark, DriftComputation, FlushModeMark, NullableDriftComputation,
+        NullableDriftComputationMulti, StreamingDataDriftMark, stream_mode::StreamModeInner,
+    },
     export,
 };
+
 use ahash::{HashMap, HashMapExt};
 use num_traits::Float;
 use std::{
@@ -24,209 +24,26 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// Batch drift detector for continuous (floating-point) features. Compares a provided runtime
-/// dataset against a fixed baseline distribution using histogram binning.
-///
-/// The baseline histogram is built once at construction and held until [`reset_baseline`] is
-/// called. Runtime data is binned on each call to [`compute_drift`] and discarded immediately
-/// after — no state is accumulated between calls.
-///
-/// # Bin count
-///
-/// The number of histogram bins is derived automatically from the baseline data using one of
-/// three heuristics, selected via [`QuantileType`]:
-///
-/// - **[`FreedmanDiaconis`]** *(default)*: `width = 2 * IQR * n^(-1/3)`, `k = ceil((max - min) / width)`.
-///   Robust to outliers. Preferred for most use cases.
-/// - **[`Scott`]**: `width = 3.49 * σ * n^(-1/3)`. Assumes approximately normal data. Sensitive
-///   to outliers in the tails.
-/// - **[`Sturges`]**: `k = floor(ln(n)) + 1`. Simple log-based rule. Works best for small,
-///   roughly normal datasets.
-///
-/// [`reset_baseline`]: ContinuousDataDrift::reset_baseline
-/// [`compute_drift`]: ContinuousDataDrift::compute_drift
-/// [`FreedmanDiaconis`]: QuantileType::FreedmanDiaconis
-/// [`Scott`]: QuantileType::Scott
-/// [`Sturges`]: QuantileType::Sturges
-pub struct ContinuousDataDrift<T: Float> {
-    baseline: BaselineContinuousBins<T>,
-    rt_bins: Vec<f64>,
-    sample_size: f64,
-}
-
-impl<T: Float> DriftContainer for ContinuousDataDrift<T> {
-    fn baseline_bins(&self) -> &[f64] {
-        &self.baseline.baseline_hist
-    }
-
-    fn runtime_bins(&self) -> &[f64] {
-        &self.rt_bins
-    }
-
-    fn baseline_sample_size(&self) -> f64 {
-        self.baseline.population_size()
-    }
-
-    fn runtime_sample_size(&self) -> f64 {
-        self.sample_size
-    }
-}
-
-impl<T: Float + serde::de::DeserializeOwned> ContinuousDataDrift<T> {
-    pub fn new_from_export(
-        export: export::ContinuousDriftBaselineExport<T>,
-    ) -> Result<ContinuousDataDrift<T>, DriftExportError> {
-        let baseline = BaselineContinuousBins::new_from_export(export)?;
-        let rt_bins = vec![0_f64; baseline.n_bins()];
-        Ok(ContinuousDataDrift {
-            baseline,
-            rt_bins,
-            sample_size: 0_f64,
-        })
-    }
-}
-
-impl<T: Float + Send + Sync> ContinuousDataDrift<T> {
-    /// Construct a new instance from a baseline dataset. The baseline is sorted and used to
-    /// define histogram bin edges.
-    ///
-    /// `quantile_type` controls how many bins are derived from the baseline. The bin count
-    /// determines the resolution of the drift signal — more bins capture finer distributional
-    /// shifts but require more runtime data per bin to be statistically meaningful. Pass `None`
-    /// to use the default. Options:
-    ///
-    /// - [`FreedmanDiaconis`] *(default)*: `width = 2 * IQR * n^(-1/3)`. Robust to outliers.
-    ///   Preferred for most use cases.
-    /// - [`Scott`]: `width = 3.49 * σ * n^(-1/3)`. Assumes approximately normal data; sensitive
-    ///   to outliers in the tails.
-    /// - [`Sturges`]: `k = floor(log2(n)) + 1`. Simple rule that works best for small, roughly
-    ///   normal datasets.
-    ///
-    /// Returns [`DriftError::EmptyBaselineData`] if the baseline slice has fewer than 2 elements,
-    /// or [`DriftError::NaNValueError`] if any value is NaN.
-    ///
-    /// [`FreedmanDiaconis`]: QuantileType::FreedmanDiaconis
-    /// [`Scott`]: QuantileType::Scott
-    /// [`Sturges`]: QuantileType::Sturges
-    pub fn new_from_baseline(
-        quantile_type: Option<QuantileType>,
-        bl_slice: &[T],
-    ) -> Result<ContinuousDataDrift<T>, DriftError> {
-        let sample_size = bl_slice.len() as f64;
-        let baseline = BaselineContinuousBins::new(bl_slice, quantile_type.unwrap_or_default())?;
-        let rt_bins = vec![0_f64; baseline.baseline_hist.len()];
-        Ok(ContinuousDataDrift {
-            baseline,
-            rt_bins,
-            sample_size,
-        })
-    }
-
-    /// Compute drift between the baseline and the provided runtime dataset. The runtime data is
-    /// binned against the baseline histogram edges, drift is computed, and the runtime bins are
-    /// cleared. Each call is stateless with respect to prior runtime data.
-    ///
-    /// To compute drift across multiple criteria, use [`ContinuousDataDrift::compute_drift_multiple_criteria`]
-    ///
-    /// Returns [`DriftError::EmptyRuntimeData`] if `runtime_data` is empty.
-    pub fn compute_drift(
-        &mut self,
-        runtime_data: &[T],
-        drift_type: ContinuousDriftType,
-    ) -> Result<DriftComputation<ContinuousDriftType>, DriftError> {
-        self.build_rt_hist(runtime_data)?;
-        let drift = compute_drift_continuous(self, drift_type);
-        self.clear_rt();
-        Ok(drift)
-    }
-
-    /// Compute drift between the baseline and the provided runtime dataset for multiple data drift
-    /// types. The runtime data is binned against the baseline histogram edges, drift is computed,
-    /// and the runtime bins are cleared. Each call is stateless with respect to prior runtime data.
-    ///
-    /// This method is much more efficient for computing drift across multiple criteria as it only
-    /// requires a single build of the runtime data distribution representation.
-    ///
-    /// Returns [`DriftError::EmptyRuntimeData`] if `runtime_data` is empty.
-    pub fn compute_drift_multiple_criteria(
-        &mut self,
-        runtime_data: &[T],
-        drift_types: &[ContinuousDriftType],
-    ) -> Result<Vec<DriftComputation<ContinuousDriftType>>, DriftError> {
-        self.build_rt_hist(runtime_data)?;
-        let drift = compute_drift_continuous_multi(self, drift_types);
-        self.clear_rt();
-        Ok(drift)
-    }
-
-    /// Replace the baseline with a new dataset. The bin count is recomputed from the new data
-    /// using the same [`QuantileType`] as construction. Any previously accumulated runtime bins
-    /// are reset to zero.
-    ///
-    /// Returns [`DriftError::EmptyBaselineData`] if the slice has fewer than 2 elements.
-    pub fn reset_baseline(&mut self, baseline_slice: &[T]) -> Result<(), DriftError> {
-        self.baseline.reset(baseline_slice)?;
-        self.init_runtime_containers();
-        Ok(())
-    }
-
-    #[inline]
-    fn build_rt_hist(&mut self, runtime_data: &[T]) -> Result<(), DriftError> {
-        if runtime_data.is_empty() {
-            return Err(DriftError::EmptyRuntimeData);
-        }
-        self.rt_bins = compute_dataset_from_bins_continuous(runtime_data, &self.baseline.bin_edges);
-        Ok(())
-    }
-
-    fn init_runtime_containers(&mut self) {
-        let len = self.baseline.baseline_hist.len();
-        self.rt_bins = vec![0_f64; len];
-    }
-
-    fn clear_rt(&mut self) {
-        self.rt_bins.fill(0.);
-        self.sample_size = 0_f64;
-    }
-}
-
-impl<T: Float> ContinuousDataDrift<T> {
-    /// The number of histogram bins derived from the baseline dataset.
-    pub fn n_bins(&self) -> usize {
-        self.baseline.n_bins()
-    }
-
-    /// Export the baseline bin proportions. Each value represents the proportion of baseline
-    /// samples that fell into the corresponding bin.
-    pub fn export_baseline(&self) -> Vec<f64> {
-        self.baseline.export_baseline()
-    }
-}
-
-impl<T: Float + serde::Serialize> ContinuousDataDrift<T> {
-    pub fn export_baseline_state(self) -> export::ContinuousDriftBaselineExport<T> {
-        self.baseline.into()
-    }
-}
-
-pub struct NullableContinuousDataDrift<T: Float> {
+pub struct NullableStreamingContinuousDataDrift<T: Float, M> {
     baseline: NullableBaselineContinuousBins<T>,
-    rt_bins: Vec<f64>,
-    n: f64,
-    null_n: f64,
+    stream_bins: Vec<f64>,
+    total_stream_size: f64,
+    null_count: f64,
+    mode: StreamModeInner,
+    _mark: PhantomData<(T, M)>,
 }
 
-impl<T: Float> DriftContainer for NullableContinuousDataDrift<T> {
+impl<T: Float, M> DriftContainer for NullableStreamingContinuousDataDrift<T, M> {
     fn baseline_bins(&self) -> &[f64] {
-        &self.baseline.baseline_hist
+        &self.baseline.baseline_bins()
     }
 
     fn runtime_bins(&self) -> &[f64] {
-        &self.rt_bins
+        &self.stream_bins
     }
 
     fn runtime_sample_size(&self) -> f64 {
-        self.n - self.null_n
+        self.total_stream_size
     }
 
     fn baseline_sample_size(&self) -> f64 {
@@ -234,131 +51,324 @@ impl<T: Float> DriftContainer for NullableContinuousDataDrift<T> {
     }
 }
 
-impl<T: Float + serde::de::DeserializeOwned> NullableContinuousDataDrift<T> {
-    pub fn new_from_export(
-        export: export::NullableContinuousDriftBaselineExport<T>,
-    ) -> Result<NullableContinuousDataDrift<T>, DriftExportError> {
-        let baseline = NullableBaselineContinuousBins::new_from_export(export)?;
-        let rt_bins = vec![0_f64; baseline.n_bins()];
-        Ok(NullableContinuousDataDrift {
+impl<T: Float + Send + Sync> NullableStreamingContinuousDataDrift<T, DecayModeMark> {
+    pub fn new_decay(
+        baseline_data: &[Option<T>],
+        quantile_type: Option<QuantileType>,
+        half_life_opt: Option<NonZeroU64>,
+    ) -> Result<NullableStreamingContinuousDataDrift<T, DecayModeMark>, DriftError> {
+        let baseline = NullableBaselineContinuousBins::new(baseline_data, quantile_type)?;
+        let bl_hist_len = baseline.baseline_bins().len();
+        let stream_bins: Vec<f64> = vec![0_f64; bl_hist_len];
+        let half_life =
+            half_life_opt.unwrap_or(NonZeroU64::new(constants::DEFAULT_DECAY_HALF_LIFE).unwrap());
+        let mode = StreamModeInner::ExponentialDecay(0.5_f64.powf(1_f64 / half_life.get() as f64));
+
+        Ok(NullableStreamingContinuousDataDrift {
+            stream_bins,
             baseline,
-            rt_bins,
-            n: 0_f64,
-            null_n: 0_f64,
+            total_stream_size: 0_f64,
+            null_count: 0_f64,
+            mode,
+            _mark: PhantomData,
         })
     }
 }
 
-impl<T: Float + Send + Sync> NullableContinuousDataDrift<T> {
-    /// Construct a new instance from a nullable baseline dataset. `None` and `Some(NaN)` values
-    /// are filtered out before bin edges are derived. The null fraction is recorded and returned
-    /// alongside each drift result.
-    ///
-    /// Returns [`DriftError::EmptyBaselineData`] if no non-null values remain after filtering,
-    /// or [`DriftError::NaNValueError`] if any `Some(NaN)` value is present.
-    pub fn new_from_baseline(
+impl<T: Float + Send + Sync> NullableStreamingContinuousDataDrift<T, FlushModeMark> {
+    pub fn new_flush(
+        baseline_data: &[Option<T>],
         quantile_type: Option<QuantileType>,
-        bl_slice: &[Option<T>],
-    ) -> Result<NullableContinuousDataDrift<T>, DriftError> {
-        let baseline = NullableBaselineContinuousBins::new(bl_slice, quantile_type)?;
-        let rt_bins = vec![0_f64; baseline.baseline_hist.len()];
-        Ok(NullableContinuousDataDrift {
+        flush_size_opt: Option<u64>,
+        flush_cadence_opt: Option<Duration>,
+    ) -> Result<NullableStreamingContinuousDataDrift<T, FlushModeMark>, DriftError> {
+        let baseline = NullableBaselineContinuousBins::new(baseline_data, quantile_type)?;
+        let bl_hist_len = baseline.baseline_bins().len();
+        let stream_bins: Vec<f64> = vec![0_f64; bl_hist_len];
+        let flush_size = flush_size_opt.unwrap_or(constants::DEFAULT_MAX_STREAM_SIZE);
+        let cadence =
+            flush_cadence_opt.unwrap_or(Duration::new(constants::DEFAULT_STREAM_FLUSH_CADENCE, 0));
+        let mode = StreamModeInner::Flush {
+            size: flush_size as f64,
+            cadence,
+            last_flush_ts: Instant::now(),
+        };
+
+        Ok(NullableStreamingContinuousDataDrift {
+            stream_bins,
             baseline,
-            rt_bins,
-            n: 0_f64,
-            null_n: 0_f64,
+            total_stream_size: 0_f64,
+            null_count: 0_f64,
+            mode,
+            _mark: PhantomData,
         })
     }
 
-    /// Compute drift between the baseline and the provided runtime dataset. `None` and `Some(NaN)`
-    /// values are treated as null and excluded from the drift computation. The null fraction of
-    /// the runtime slice is reported in the returned [`NullableDriftComputation`].
-    ///
-    /// Returns [`DriftError::EmptyRuntimeData`] if `runtime_data` is empty.
+    pub fn flush(&mut self) {
+        self.mode
+            .perform_flush(&mut self.stream_bins, &mut self.total_stream_size);
+    }
+
+    /// Returns the number of seconds elapsed since the last flush.
+    pub fn last_flush(&self) -> u64 {
+        self.mode.last_flush()
+    }
+}
+
+impl<T: Float + serde::de::DeserializeOwned>
+    NullableStreamingContinuousDataDrift<T, DecayModeMark>
+{
+    pub fn new_from_base_export(
+        export: export::NullableStreamingContinuousBaseExport<T>,
+    ) -> Result<NullableStreamingContinuousDataDrift<T, DecayModeMark>, DriftExportError> {
+        let export::NullableStreamingContinuousBaseExport {
+            baseline: baseline_export,
+            stream_mode,
+        } = export;
+        let mode: StreamModeInner = stream_mode.into();
+        let baseline = NullableBaselineContinuousBins::new_from_export(baseline_export)?;
+
+        if matches!(mode, StreamModeInner::Flush { .. }) {
+            return Err(DriftExportError::InvalidDriftMode);
+        }
+        let n_bins = baseline.n_bins();
+        Ok(NullableStreamingContinuousDataDrift {
+            baseline,
+            stream_bins: vec![0_f64; n_bins],
+            total_stream_size: 0_f64,
+            null_count: 0_f64,
+            mode,
+            _mark: PhantomData,
+        })
+    }
+
+    pub fn new_from_stateful_export(
+        export: export::StreamingContinuousStatefulExport<T>,
+    ) -> Result<StreamingContinuousDataDrift<T, DecayModeMark>, DriftExportError> {
+        let export::StreamingContinuousStatefulExport {
+            baseline: baseline_export,
+            stream_mode,
+            stream_bins,
+        } = export;
+        let mode: StreamModeInner = stream_mode.into();
+        let baseline = BaselineContinuousBins::new_from_export(baseline_export)?;
+
+        if matches!(mode, StreamModeInner::Flush { .. }) {
+            return Err(DriftExportError::InvalidDriftMode);
+        }
+        Ok(StreamingContinuousDataDrift {
+            baseline,
+            stream_bins,
+            total_stream_size: 0_f64,
+            mode,
+            _mark: PhantomData,
+        })
+    }
+}
+
+impl<T: Float + serde::de::DeserializeOwned>
+    NullableStreamingContinuousDataDrift<T, FlushModeMark>
+{
+    pub fn new_from_base_export(
+        export: export::StreamingContinuousBaseExport<T>,
+    ) -> Result<StreamingContinuousDataDrift<T, FlushModeMark>, DriftExportError> {
+        let export::StreamingContinuousBaseExport {
+            baseline: baseline_export,
+            stream_mode,
+        } = export;
+        let mode: StreamModeInner = stream_mode.into();
+        let baseline = BaselineContinuousBins::new_from_export(baseline_export)?;
+
+        if matches!(mode, StreamModeInner::ExponentialDecay(_)) {
+            return Err(DriftExportError::InvalidDriftMode);
+        }
+        let n_bins = baseline.n_bins();
+        Ok(StreamingContinuousDataDrift {
+            baseline,
+            stream_bins: vec![0_f64; n_bins],
+            total_stream_size: 0_f64,
+            mode,
+            _mark: PhantomData,
+        })
+    }
+
+    pub fn new_from_stateful_export(
+        export: export::StreamingContinuousStatefulExport<T>,
+    ) -> Result<StreamingContinuousDataDrift<T, FlushModeMark>, DriftExportError> {
+        let export::StreamingContinuousStatefulExport {
+            baseline: baseline_export,
+            stream_mode,
+            stream_bins,
+        } = export;
+        let mode: StreamModeInner = stream_mode.into();
+        let baseline = BaselineContinuousBins::new_from_export(baseline_export)?;
+
+        if matches!(mode, StreamModeInner::ExponentialDecay(_)) {
+            return Err(DriftExportError::InvalidDriftMode);
+        }
+        Ok(StreamingContinuousDataDrift {
+            baseline,
+            stream_bins,
+            total_stream_size: 0_f64,
+            mode,
+            _mark: PhantomData,
+        })
+    }
+}
+
+#[allow(private_bounds)]
+impl<T: Float + serde::Serialize, M: StreamingDataDriftMark>
+    NullableStreamingContinuousDataDrift<T, M>
+{
+    pub fn export_baseline_state(self) -> export::NullableStreamingContinuousBaseExport<T> {
+        let baseline: export::NullableContinuousDriftBaselineExport<T> = self.baseline.into();
+
+        export::NullableStreamingContinuousBaseExport {
+            baseline,
+            stream_mode: self.mode.into(),
+        }
+    }
+
+    pub fn export_stream_state(self) -> export::NullableStreamingContinuousStatefulExport<T> {
+        let baseline: export::NullableContinuousDriftBaselineExport<T> = self.baseline.into();
+
+        export::NullableStreamingContinuousStatefulExport {
+            baseline,
+            stream_bins: self.stream_bins,
+            stream_mode: self.mode.into(),
+            null_samples: self.null_count,
+            total_samples: self.total_stream_size,
+        }
+    }
+}
+
+#[allow(private_bounds)]
+impl<T: Float, M: StreamingDataDriftMark> NullableStreamingContinuousDataDrift<T, M> {
     pub fn compute_drift(
         &mut self,
-        runtime_data: &[Option<T>],
         drift_type: ContinuousDriftType,
     ) -> Result<NullableDriftComputation<ContinuousDriftType>, DriftError> {
-        self.build_rt_hist(runtime_data)?;
-        let null_percentage = self.null_n / self.n;
+        if self.is_empty() {
+            return Err(DriftError::EmptyRuntimeData);
+        }
+        self.mode
+            .apply_decay(&mut self.stream_bins, &mut self.total_stream_size);
         let drift = compute_drift_continuous(self, drift_type);
-        self.clear_rt();
         Ok(NullableDriftComputation {
             drift,
-            null_percentage,
+            null_percentage: self.null_count / self.total_stream_size,
         })
     }
 
-    /// Compute drift for multiple metrics in a single call. More efficient than calling
-    /// [`compute_drift`] in a loop as runtime binning is performed once.
-    ///
-    /// Returns [`DriftError::EmptyRuntimeData`] if `runtime_data` is empty.
-    ///
-    /// [`compute_drift`]: NullableContinuousDataDrift::compute_drift
     pub fn compute_drift_multiple_criteria(
         &mut self,
-        runtime_data: &[Option<T>],
         drift_types: &[ContinuousDriftType],
     ) -> Result<NullableDriftComputationMulti<ContinuousDriftType>, DriftError> {
-        self.build_rt_hist(runtime_data)?;
-        let null_percentage = self.null_n / self.n;
+        if self.is_empty() {
+            return Err(DriftError::EmptyRuntimeData);
+        }
+
+        self.mode
+            .apply_decay(&mut self.stream_bins, &mut self.total_stream_size);
+
         let drift = compute_drift_continuous_multi(self, drift_types);
-        self.clear_rt();
         Ok(NullableDriftComputationMulti {
             drift,
-            null_percentage,
+            null_percentage: self.null_count / self.total_stream_size,
         })
     }
 
-    /// Replace the baseline with a new dataset, preserving the original [`QuantileType`]. All
-    /// runtime bins are cleared.
-    ///
-    /// Returns [`DriftError::EmptyBaselineData`] if no non-null values remain after filtering.
-    pub fn reset_baseline(&mut self, baseline_slice: &[Option<T>]) -> Result<(), DriftError> {
-        self.baseline.reset(baseline_slice)?;
-        self.rt_bins = vec![0_f64; self.baseline.baseline_hist.len()];
-        Ok(())
+    fn check_flush(&mut self) {
+        if self.mode.needs_flush(self.total_stream_size) {
+            self.mode
+                .perform_flush(&mut self.stream_bins, &mut self.total_stream_size)
+        }
     }
 
     #[inline]
-    fn build_rt_hist(&mut self, runtime_data: &[Option<T>]) -> Result<(), DriftError> {
-        if runtime_data.is_empty() {
+    fn inner_update_stream(&mut self, runtime_example: Option<T>) {
+        if let Some(idx) = self.baseline.resolve_bin(runtime_example) {
+            self.stream_bins[idx] += 1_f64;
+            self.total_stream_size += 1_f64;
+        } else {
+            self.null_count += 1_f64
+        }
+    }
+
+    pub fn update_stream(&mut self, runtime_example: Option<T>) {
+        self.check_flush();
+        self.inner_update_stream(runtime_example)
+    }
+
+    /// Push a batch of examples into the stream. Each item is checked against flush thresholds
+    /// individually, so a flush may occur mid-batch if the size threshold is crossed.
+    ///
+    /// Returns [`DriftError::EmptyRuntimeData`] if the slice is empty.
+    pub fn update_stream_batch(&mut self, runtime_slice: &[Option<T>]) -> Result<(), DriftError> {
+        if runtime_slice.is_empty() {
             return Err(DriftError::EmptyRuntimeData);
         }
-        self.n = runtime_data.len() as f64;
-        let (bins, null_count) = compute_dataset_from_bins_continuous_null_parallel(
-            runtime_data,
-            &self.baseline.bin_edges(),
-        );
-        self.null_n = null_count as f64;
-        self.rt_bins = bins;
+        self.check_flush();
+        runtime_slice
+            .iter()
+            .for_each(|item| self.inner_update_stream(*item));
+
         Ok(())
     }
 
-    fn clear_rt(&mut self) {
-        self.rt_bins.fill(0_f64);
-        self.n = 0_f64;
-        self.null_n = 0_f64;
+    /// Returns `true` if no data has been accumulated since construction or the last flush.
+    pub fn is_empty(&self) -> bool {
+        self.stream_bins.iter().sum::<f64>() == 0_f64
     }
-}
 
-impl<T: Float> NullableContinuousDataDrift<T> {
+    /// The number of samples accumulated in the stream since the last flush. In decay mode this
+    /// reflects the effective (decayed) sample count rather than the raw push count.
+    pub fn total_samples(&self) -> usize {
+        self.total_stream_size as usize
+    }
+
     /// The number of histogram bins derived from the baseline dataset.
     pub fn n_bins(&self) -> usize {
         self.baseline.n_bins()
     }
 
-    /// Export the baseline bin proportions. Each value represents the proportion of non-null
-    /// baseline samples that fell into the corresponding bin.
+    /// Export a point-in-time snapshot of the stream state as a map with three keys:
+    ///
+    /// - `"binEdges"`: the histogram bin edge values defining the boundaries between bins.
+    /// - `"baselineBins"`: proportional bin distribution of the baseline dataset.
+    /// - `"streamBins"`: proportional bin distribution of the currently accumulated stream data.
+    ///
+    /// All bin values are normalized to proportions in `[0, 1]`.
+    ///
+    /// Returns [`DriftError::EmptyRuntimeData`] if no data has been accumulated.
+    pub fn export_snapshot(&self) -> Result<HashMap<String, Vec<f64>>, DriftError> {
+        if self.total_stream_size == 0_f64 {
+            return Err(DriftError::EmptyRuntimeData);
+        }
+        // determine snapshot shape
+        let mut table: HashMap<String, Vec<f64>> = HashMap::with_capacity(3);
+        let bin_edges_export = self
+            .baseline
+            .export_bin_edges()
+            .iter()
+            .map(|e| e.to_f64().unwrap())
+            .collect();
+        table.insert("binEdges".into(), bin_edges_export);
+        table.insert("baselineBins".into(), self.export_baseline());
+        let bin_ratio_snapshot = self
+            .stream_bins
+            .iter()
+            .map(|v| *v / self.total_stream_size)
+            .collect();
+        table.insert("streamBins".into(), bin_ratio_snapshot);
+        Ok(table)
+    }
+
+    /// Export the baseline bin proportions. Returns an owned `Vec<f64>`, which contains the
+    /// proportional bin distribution present in the baseline set, and thus what all drift metrics
+    /// are computed with respect to.
     pub fn export_baseline(&self) -> Vec<f64> {
         self.baseline.export_baseline()
-    }
-}
-
-impl<T: Float + serde::Serialize> NullableContinuousDataDrift<T> {
-    pub fn export_baseline_state(self) -> export::NullableContinuousDriftBaselineExport<T> {
-        self.baseline.into()
     }
 }
 
@@ -399,7 +409,7 @@ pub struct StreamingContinuousDataDrift<T: Float, M> {
 
 impl<T: Float, M> DriftContainer for StreamingContinuousDataDrift<T, M> {
     fn baseline_bins(&self) -> &[f64] {
-        &self.baseline.baseline_hist
+        &self.baseline.baseline_bins()
     }
 
     fn runtime_bins(&self) -> &[f64] {
@@ -511,6 +521,7 @@ impl<T: Float + serde::de::DeserializeOwned> StreamingContinuousDataDrift<T, Flu
     }
 }
 
+#[allow(private_bounds)]
 impl<T: Float + serde::Serialize, M: StreamingDataDriftMark> StreamingContinuousDataDrift<T, M> {
     pub fn export_baseline_state(self) -> export::StreamingContinuousBaseExport<T> {
         let baseline: export::ContinuousDriftBaselineExport<T> = self.baseline.into();
@@ -564,7 +575,7 @@ impl<T: Float + Send + Sync> StreamingContinuousDataDrift<T, DecayModeMark> {
     ) -> Result<StreamingContinuousDataDrift<T, DecayModeMark>, DriftError> {
         let baseline =
             BaselineContinuousBins::new(baseline_data, quantile_type.unwrap_or_default())?;
-        let bl_hist_len = baseline.baseline_hist.len();
+        let bl_hist_len = baseline.baseline_bins().len();
         let stream_bins: Vec<f64> = vec![0_f64; bl_hist_len];
         let half_life =
             half_life_opt.unwrap_or(NonZeroU64::new(constants::DEFAULT_DECAY_HALF_LIFE).unwrap());
@@ -608,7 +619,7 @@ impl<T: Float + Send + Sync> StreamingContinuousDataDrift<T, FlushModeMark> {
     ) -> Result<StreamingContinuousDataDrift<T, FlushModeMark>, DriftError> {
         let baseline =
             BaselineContinuousBins::new(baseline_data, quantile_type.unwrap_or_default())?;
-        let bl_hist_len = baseline.baseline_hist.len();
+        let bl_hist_len = baseline.baseline_bins().len();
         let stream_bins: Vec<f64> = vec![0_f64; bl_hist_len];
         let flush_size = flush_size_opt.unwrap_or(constants::DEFAULT_MAX_STREAM_SIZE);
         let cadence =
@@ -627,9 +638,7 @@ impl<T: Float + Send + Sync> StreamingContinuousDataDrift<T, FlushModeMark> {
             _mark: PhantomData,
         })
     }
-}
 
-impl<T: Float> StreamingContinuousDataDrift<T, FlushModeMark> {
     pub fn flush(&mut self) {
         self.mode
             .perform_flush(&mut self.stream_bins, &mut self.total_stream_size);
@@ -771,7 +780,7 @@ impl<T: Float + Send + Sync, M: StreamingDataDriftMark> StreamingContinuousDataD
     /// Returns [`DriftError::EmptyBaselineData`] if the slice has fewer than 2 elements.
     pub fn reset_baseline(&mut self, baseline_slice: &[T]) -> Result<(), DriftError> {
         self.baseline.reset(baseline_slice)?;
-        self.stream_bins = vec![0_f64; self.baseline.baseline_hist.len()];
+        self.stream_bins = vec![0_f64; self.baseline.baseline_bins().len()];
         self.total_stream_size = 0_f64;
         self.mode.touch_flush_ts();
         Ok(())
@@ -781,40 +790,6 @@ impl<T: Float + Send + Sync, M: StreamingDataDriftMark> StreamingContinuousDataD
 #[cfg(test)]
 mod continuous_tests {
     use super::*;
-
-    #[test]
-    fn test_continuous_baseline_builds_expected_bins() {
-        let baseline = [1.0, 2.0, 3.0, 4.0];
-        let psi = ContinuousDataDrift::new_from_baseline(None, &baseline).unwrap();
-
-        let expected_bins = QuantileType::FreedmanDiaconis.compute_num_bins(&baseline);
-
-        assert_eq!(psi.baseline.bin_edges.len(), expected_bins - 2);
-        assert_eq!(psi.rt_bins.len(), expected_bins);
-    }
-
-    #[test]
-    fn test_continuous_psi_zero_when_no_drift() {
-        let baseline = [1.0, 2.0, 3.0, 4.0];
-        let mut psi = ContinuousDataDrift::new_from_baseline(None, &baseline).unwrap();
-        let runtime = [1.0, 2.0, 3.0, 4.0];
-
-        let drift = psi
-            .compute_drift(&runtime, ContinuousDriftType::PopulationStabilityIndex)
-            .unwrap();
-        assert!(drift.drift_magnitude.abs() < 1e-9);
-    }
-
-    #[test]
-    fn test_continuous_psi_detects_shift() {
-        let baseline = [1.0, 2.0, 3.0, 4.0];
-        let mut psi = ContinuousDataDrift::new_from_baseline(None, &baseline).unwrap();
-        let runtime = [10.0, 11.0, 12.0, 13.0];
-        let drift = psi
-            .compute_drift(&runtime, ContinuousDriftType::PopulationStabilityIndex)
-            .unwrap();
-        assert!(drift.drift_magnitude > 0.5);
-    }
 
     #[test]
     fn test_streaming_continuous_accumulation() {
@@ -857,26 +832,6 @@ mod continuous_tests {
     // --- error paths ---
 
     #[test]
-    fn continuous_batch_empty_baseline_returns_err() {
-        assert!(ContinuousDataDrift::new_from_baseline(None, &[1.0]).is_err());
-    }
-
-    #[test]
-    fn continuous_batch_nan_baseline_returns_err() {
-        assert!(ContinuousDataDrift::new_from_baseline(None, &[1.0, f64::NAN, 3.0]).is_err());
-    }
-
-    #[test]
-    fn continuous_batch_empty_runtime_returns_err() {
-        let mut det =
-            ContinuousDataDrift::new_from_baseline(None, &[1.0, 2.0, 3.0, 4.0, 5.0]).unwrap();
-        assert!(
-            det.compute_drift(&[], ContinuousDriftType::PopulationStabilityIndex)
-                .is_err()
-        );
-    }
-
-    #[test]
     fn continuous_streaming_empty_batch_returns_err() {
         let mut s =
             StreamingContinuousDataDrift::new_flush(&[1.0, 2.0, 3.0, 4.0, 5.0], None, None, None)
@@ -896,72 +851,6 @@ mod continuous_tests {
     }
 
     // --- statelessness ---
-
-    #[test]
-    fn continuous_batch_compute_drift_is_stateless() {
-        let baseline: Vec<f64> = (0..50).map(|i| i as f64).collect();
-        let runtime: Vec<f64> = (10..40).map(|i| i as f64).collect();
-        let mut det = ContinuousDataDrift::new_from_baseline(None, &baseline).unwrap();
-
-        let d1 = det
-            .compute_drift(&runtime, ContinuousDriftType::PopulationStabilityIndex)
-            .unwrap();
-        let d2 = det
-            .compute_drift(&runtime, ContinuousDriftType::PopulationStabilityIndex)
-            .unwrap();
-        assert!((d1.drift_magnitude - d2.drift_magnitude).abs() < 1e-12);
-    }
-
-    // --- all drift types ---
-
-    #[test]
-    fn continuous_batch_all_drift_types_finite_nonnegative() {
-        let baseline: Vec<f64> = (0..100).map(|i| i as f64).collect();
-        let runtime: Vec<f64> = (20..80).map(|i| i as f64).collect();
-        let mut det = ContinuousDataDrift::new_from_baseline(None, &baseline).unwrap();
-
-        for drift_type in [
-            ContinuousDriftType::PopulationStabilityIndex,
-            ContinuousDriftType::KullbackLeibler,
-            ContinuousDriftType::JensenShannon,
-            ContinuousDriftType::WassersteinDistance,
-        ] {
-            let v = det.compute_drift(&runtime, drift_type).unwrap();
-            assert!(
-                v.drift_magnitude.is_finite(),
-                "{drift_type:?} produced non-finite value"
-            );
-            assert!(
-                v.drift_magnitude >= 0.0,
-                "{drift_type:?} produced negative value"
-            );
-        }
-    }
-
-    // --- reset_baseline ---
-
-    #[test]
-    fn continuous_batch_reset_baseline_changes_n_bins() {
-        let mut det =
-            ContinuousDataDrift::new_from_baseline(None, &[1.0, 2.0, 3.0, 4.0, 5.0]).unwrap();
-        let old_bins = det.n_bins();
-
-        let large_baseline: Vec<f64> = (0..200).map(|i| i as f64).collect();
-        det.reset_baseline(&large_baseline).unwrap();
-
-        assert_ne!(det.n_bins(), old_bins);
-        assert_eq!(det.rt_bins.len(), det.n_bins());
-    }
-
-    // --- export_baseline ---
-
-    #[test]
-    fn continuous_batch_export_baseline_sums_to_one() {
-        let baseline: Vec<f64> = (0..100).map(|i| i as f64).collect();
-        let det = ContinuousDataDrift::new_from_baseline(None, &baseline).unwrap();
-        let sum: f64 = det.export_baseline().iter().sum();
-        assert!((sum - 1.0).abs() < 1e-9);
-    }
 
     // --- streaming flush-mode extras ---
 
@@ -986,7 +875,7 @@ mod continuous_tests {
 
         assert!(s.is_empty());
         assert_eq!(s.total_samples(), 0);
-        assert_eq!(s.stream_bins.len(), s.baseline.baseline_hist.len());
+        assert_eq!(s.stream_bins.len(), s.baseline.baseline_bins().len());
     }
 
     #[test]

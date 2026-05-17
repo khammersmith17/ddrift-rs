@@ -53,12 +53,12 @@ pub struct StreamingContinuousStatefulExport<T> {
 impl<T: Float + DeserializeOwned> LoadDataDriftExport for StreamingContinuousStatefulExport<T> {}
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct NullableContinuousDriftBaselineExport<T> {
+pub struct NullableContinuousDriftBaselineExport<T: Float> {
     pub bin_edges: Vec<T>,
     pub baseline_hist: Vec<f64>,
     pub quantile_type: QuantileType,
     pub sample_size: f64,
-    pub null_n: f64,
+    pub null_count: f64,
 }
 
 impl<T: Float + DeserializeOwned> LoadDataDriftExport for NullableContinuousDriftBaselineExport<T> {}
@@ -118,3 +118,25 @@ pub struct NullableStreamingCategoricalStatefulExport {
 }
 
 impl LoadDataDriftExport for NullableStreamingCategoricalStatefulExport {}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct NullableStreamingContinuousBaseExport<T: Float> {
+    pub baseline: NullableContinuousDriftBaselineExport<T>,
+    pub stream_mode: StreamingDriftMode,
+}
+
+impl<T: Float + DeserializeOwned> LoadDataDriftExport for NullableStreamingContinuousBaseExport<T> {}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct NullableStreamingContinuousStatefulExport<T: Float> {
+    pub stream_bins: Vec<f64>,
+    pub baseline: NullableContinuousDriftBaselineExport<T>,
+    pub stream_mode: StreamingDriftMode,
+    pub total_samples: f64,
+    pub null_samples: f64,
+}
+
+impl<T: Float + DeserializeOwned> LoadDataDriftExport
+    for NullableStreamingContinuousStatefulExport<T>
+{
+}
