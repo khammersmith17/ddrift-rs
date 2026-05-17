@@ -1,10 +1,10 @@
 use super::{
     DecayModeMark, DriftComputation, FlushModeMark, NullableDriftComputation,
-    NullableDriftComputationMulti, StreamingDataDriftMark, constants, stream_mode::StreamModeInner,
+    NullableDriftComputationMulti, StreamingDataDriftMark, stream_mode::StreamModeInner,
 };
 use crate::{
     baseline::categorical::{BaselineCategoricalBins, NullableBaselineCategoricalBins},
-    core::bin_edges::CategoricalBinEdges,
+    constants,
     core::{
         compute_dataset_from_bins_categorical, compute_dataset_from_bins_categorical_parallel,
         compute_dataset_from_nullable_bins_categorical,
@@ -122,10 +122,9 @@ impl<T: Hash + Ord + Clone> NullableCategoricalDataDrift<T> {
         if runtime_data.is_empty() {
             return Err(DriftError::EmptyRuntimeData);
         }
-        let edges = CategoricalBinEdges(&self.baseline.idx_map);
         self.n = runtime_data.len() as f64;
         (self.rt_bins, self.null_n) =
-            compute_dataset_from_nullable_bins_categorical(runtime_data, &edges);
+            compute_dataset_from_nullable_bins_categorical(runtime_data, self.baseline.bin_edges());
         Ok(())
     }
 
@@ -611,7 +610,8 @@ impl<T: Hash + Ord + Clone, M: StreamingDataDriftMark> NullableStreamingCategori
     /// [`total_samples`]: StreamingCategoricalDataDrift::total_samples
     pub fn export_snapshot(&self) -> HashMap<T, f64> {
         self.baseline
-            .idx_map
+            .bin_edges()
+            .inner_ref()
             .iter()
             .map(|(feat_name, i)| (feat_name.clone(), self.stream_bins[*i]))
             .collect()
@@ -725,8 +725,8 @@ impl<T: Hash + Ord + Clone + Sync> CategoricalDataDrift<T> {
         if runtime_data.is_empty() {
             return Err(DriftError::EmptyRuntimeData);
         }
-        let edges = CategoricalBinEdges(&self.baseline.idx_map);
-        self.rt_bins = compute_dataset_from_bins_categorical_parallel(runtime_data, &edges);
+        self.rt_bins =
+            compute_dataset_from_bins_categorical_parallel(runtime_data, self.baseline.bin_edges());
         self.sample_size = runtime_data.len() as f64;
         Ok(())
     }
@@ -843,8 +843,8 @@ impl<T: Hash + Ord + Clone> CategoricalDataDrift<T> {
         if runtime_data.is_empty() {
             return Err(DriftError::EmptyRuntimeData);
         }
-        let edges = CategoricalBinEdges(&self.baseline.idx_map);
-        self.rt_bins = compute_dataset_from_bins_categorical(runtime_data, &edges);
+        self.rt_bins =
+            compute_dataset_from_bins_categorical(runtime_data, self.baseline.bin_edges());
         Ok(())
     }
 
@@ -1350,7 +1350,8 @@ impl<T: Hash + Ord + Clone, M: StreamingDataDriftMark> StreamingCategoricalDataD
     /// [`total_samples`]: StreamingCategoricalDataDrift::total_samples
     pub fn export_snapshot(&self) -> HashMap<T, f64> {
         self.baseline
-            .idx_map
+            .bin_edges()
+            .inner_ref()
             .iter()
             .map(|(feat_name, i)| (feat_name.clone(), self.stream_bins[*i]))
             .collect()

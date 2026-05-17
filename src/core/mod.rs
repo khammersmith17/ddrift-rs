@@ -2,8 +2,9 @@ pub mod bin_edges;
 pub mod distribution;
 pub mod drift_metrics;
 pub mod error;
-use bin_edges::{CategoricalBinEdges, ContinuousBinEdges};
+use bin_edges::{CategoricalBinEdges, ContinuousBinEdges, NullableCategoricalBinEdges};
 mod opt;
+use crate::constants::get_thread_count;
 use ahash::{HashMap, HashMapExt};
 use error::DriftError;
 use num_traits::Float;
@@ -14,7 +15,7 @@ pub(crate) fn compute_dataset_from_bins_continuous<T: Float + Send + Sync>(
     dataset: &[T],
     edges: &ContinuousBinEdges<T>,
 ) -> Vec<f64> {
-    let thread_count = opt::get_thread_count(dataset.len());
+    let thread_count = get_thread_count(dataset.len());
     if thread_count > 1 {
         opt::continuous::parallel_approx_dataset(dataset, edges, thread_count)
     } else {
@@ -29,7 +30,7 @@ pub(crate) fn compute_dataset_from_bins_continuous_null_parallel<T: Float + Send
     opt::continuous::parallel_approx_dataset_nullable(
         dataset,
         edges,
-        opt::get_thread_count(dataset.len()),
+        get_thread_count(dataset.len()),
     )
 }
 
@@ -53,12 +54,12 @@ pub(crate) fn compute_dataset_from_bins_categorical_parallel<'a, T: Hash + Ord +
 
 pub(crate) fn compute_dataset_from_nullable_bins_categorical<'a, T: Hash + Ord + Clone>(
     dataset: &'a [Option<T>],
-    edges: &'a CategoricalBinEdges<T>,
+    edges: &'a NullableCategoricalBinEdges<T>,
 ) -> (Vec<f64>, f64) {
     let mut hist = vec![0_f64; edges.n_bins()];
     let mut null_n = 0_f64;
     dataset.iter().for_each(|e| {
-        if let Some(idx) = edges.resolve_bin_opt(e) {
+        if let Some(idx) = edges.resolve_bin(e) {
             hist[idx] += 1_f64
         } else {
             null_n += 1_f64

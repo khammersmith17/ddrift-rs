@@ -1,5 +1,4 @@
 pub mod categorical;
-mod constants;
 pub mod continuous;
 pub mod stream_mode;
 

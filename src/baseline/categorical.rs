@@ -1,5 +1,6 @@
 use crate::{
     core::{
+        bin_edges::{CategoricalBinEdges, NullableCategoricalBinEdges},
         categorical_derive_baseline_state,
         error::{DriftError, DriftExportError},
         nullable_categorical_derive_baseline_state,
@@ -19,11 +20,11 @@ use std::hash::Hash;
 // idx_map holds the bin for a particular data value.
 // Baseline bins are the histogram generated on baseline data, and other label represents the
 // "other" bucket for when a discrete value not seen in the baseline set is observed.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub(crate) struct BaselineCategoricalBins<T: Hash + Ord + Clone> {
-    pub(crate) idx_map: HashMap<T, usize>,
+    pub(crate) bin_edges: CategoricalBinEdges<T>,
     pub(crate) baseline_bins: Vec<f64>,
-    pub(crate) n: f64,
+    pub(crate) sample_size: f64,
 }
 
 impl<T: Hash + Ord + Clone + serde::Serialize> TryInto<CategoricalDriftBaselineExport>
@@ -32,12 +33,12 @@ impl<T: Hash + Ord + Clone + serde::Serialize> TryInto<CategoricalDriftBaselineE
     type Error = serde_json::Error;
     fn try_into(self) -> Result<CategoricalDriftBaselineExport, Self::Error> {
         let BaselineCategoricalBins {
-            idx_map,
+            bin_edges,
             baseline_bins: baseline_hist,
-            n,
+            sample_size,
         } = self;
 
-        let value_set: BTreeSet<T> = idx_map.into_iter().map(|(key, _)| key).collect();
+        let value_set: BTreeSet<T> = bin_edges.0.into_iter().map(|(key, _)| key).collect();
         let mut baseline_values: Vec<serde_json::Value> = Vec::with_capacity(value_set.len());
         for value in value_set.into_iter() {
             baseline_values.push(serde_json::to_value(value)?);
@@ -46,7 +47,7 @@ impl<T: Hash + Ord + Clone + serde::Serialize> TryInto<CategoricalDriftBaselineE
         Ok(CategoricalDriftBaselineExport {
             baseline_hist,
             baseline_values,
-            n,
+            sample_size,
         })
     }
 }
@@ -59,7 +60,7 @@ impl<T: Hash + Ord + Clone + serde::de::DeserializeOwned> TryFrom<CategoricalDri
         let CategoricalDriftBaselineExport {
             baseline_hist,
             baseline_values,
-            n,
+            sample_size,
         } = export;
 
         if baseline_hist.len() - 1 != baseline_values.len() {
@@ -77,10 +78,12 @@ impl<T: Hash + Ord + Clone + serde::de::DeserializeOwned> TryFrom<CategoricalDri
             .map(|(i, label)| (label, i))
             .collect();
 
+        let bin_edges = CategoricalBinEdges::new(idx_map);
+
         Ok(BaselineCategoricalBins {
             baseline_bins: baseline_hist,
-            idx_map,
-            n,
+            bin_edges,
+            sample_size,
         })
     }
 }
@@ -103,11 +106,16 @@ impl<T: Hash + Ord + Clone> BaselineCategoricalBins<T> {
     // bins and index map, allocated bins, fill histogram with counts.
     pub(crate) fn new(baseline_data: &[T]) -> Result<BaselineCategoricalBins<T>, DriftError> {
         let (idx_map, baseline_bins) = categorical_derive_baseline_state(baseline_data)?;
+        let bin_edges = CategoricalBinEdges::new(idx_map);
         Ok(BaselineCategoricalBins {
-            idx_map,
+            bin_edges,
             baseline_bins,
-            n: baseline_data.len() as f64,
+            sample_size: baseline_data.len() as f64,
         })
+    }
+
+    pub(crate) fn bin_edges(&self) -> &CategoricalBinEdges<T> {
+        &self.bin_edges
     }
 
     /// Resolve the bin idx for a particular key, otherwise return out the bin reserved for the
@@ -117,20 +125,17 @@ impl<T: Hash + Ord + Clone> BaselineCategoricalBins<T> {
         T: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        if let Some(idx) = self.idx_map.get(key) {
-            *idx
-        } else {
-            self.baseline_bins.len() - 1
-        }
+        self.bin_edges.resolve_bin(key)
     }
 
     pub(crate) fn population_size(&self) -> f64 {
-        self.n
+        self.sample_size
     }
 
     /// Export the baseline histogram.
     pub(crate) fn export_baseline(&self) -> HashMap<T, f64> {
-        self.idx_map
+        self.bin_edges
+            .0
             .iter()
             .map(|(feat_name, i)| (feat_name.clone(), self.baseline_bins[*i]))
             .collect()
@@ -153,13 +158,13 @@ impl<T: Hash + Ord + Clone + serde::Serialize> TryInto<NullableCategoricalDriftB
     type Error = serde_json::Error;
     fn try_into(self) -> Result<NullableCategoricalDriftBaselineExport, Self::Error> {
         let NullableBaselineCategoricalBins {
-            idx_map,
+            bin_edges,
             baseline_bins: baseline_hist,
-            total_n,
-            null_n,
+            total_samples,
+            null_samples,
         } = self;
 
-        let value_set: BTreeSet<T> = idx_map.into_iter().map(|(key, _)| key).collect();
+        let value_set: BTreeSet<T> = bin_edges.0.into_iter().map(|(key, _)| key).collect();
         let mut baseline_values: Vec<serde_json::Value> = Vec::with_capacity(value_set.len());
         for value in value_set.into_iter() {
             baseline_values.push(serde_json::to_value(value)?);
@@ -168,18 +173,18 @@ impl<T: Hash + Ord + Clone + serde::Serialize> TryInto<NullableCategoricalDriftB
         Ok(NullableCategoricalDriftBaselineExport {
             baseline_hist,
             baseline_values,
-            n: total_n,
-            null_n,
+            total_samples,
+            null_samples,
         })
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct NullableBaselineCategoricalBins<T: Hash + Ord + Clone> {
-    pub(crate) idx_map: HashMap<T, usize>,
+    pub bin_edges: NullableCategoricalBinEdges<T>,
     pub(crate) baseline_bins: Vec<f64>,
-    pub(crate) total_n: f64,
-    pub(crate) null_n: f64,
+    pub(crate) total_samples: f64,
+    pub(crate) null_samples: f64,
 }
 
 impl<T: Hash + Ord + Clone> NullableBaselineCategoricalBins<T> {
@@ -189,20 +194,26 @@ impl<T: Hash + Ord + Clone> NullableBaselineCategoricalBins<T> {
         let (idx_map, baseline_bins, null_count) =
             nullable_categorical_derive_baseline_state(baseline_data)?;
 
+        let bin_edges = NullableCategoricalBinEdges::new(idx_map);
+
         Ok(NullableBaselineCategoricalBins {
-            idx_map,
+            bin_edges,
             baseline_bins,
-            total_n: baseline_data.len() as f64,
-            null_n: null_count as f64,
+            total_samples: baseline_data.len() as f64,
+            null_samples: null_count as f64,
         })
     }
 
     pub(crate) fn population_size(&self) -> f64 {
-        self.total_n - self.null_n
+        self.total_samples - self.null_samples
     }
 
     pub(crate) fn get_baseline_hist(&self) -> &[f64] {
         &self.baseline_bins
+    }
+
+    pub(crate) fn bin_edges(&self) -> &NullableCategoricalBinEdges<T> {
+        &self.bin_edges
     }
 
     /// Resolve the bin idx for a particular key, otherwise return out the bin reserved for the
@@ -212,20 +223,13 @@ impl<T: Hash + Ord + Clone> NullableBaselineCategoricalBins<T> {
         T: Borrow<Q>,
         Q: Hash + Eq,
     {
-        let Some(key) = key_opt else {
-            return None;
-        };
-
-        if let Some(idx) = self.idx_map.get(key) {
-            Some(*idx)
-        } else {
-            Some(self.baseline_bins.len() - 1)
-        }
+        self.bin_edges.resolve_bin(key_opt)
     }
 
     /// Export the baseline histogram.
     pub(crate) fn export_baseline(&self) -> HashMap<T, f64> {
-        self.idx_map
+        self.bin_edges
+            .0
             .iter()
             .map(|(feat_name, i)| (feat_name.clone(), self.baseline_bins[*i]))
             .collect()
@@ -250,8 +254,8 @@ impl<T: Hash + Ord + Clone + serde::de::DeserializeOwned>
         let NullableCategoricalDriftBaselineExport {
             baseline_hist,
             baseline_values,
-            n,
-            null_n,
+            total_samples,
+            null_samples,
         } = export;
 
         if baseline_hist.len() - 1 != baseline_values.len() {
@@ -269,11 +273,13 @@ impl<T: Hash + Ord + Clone + serde::de::DeserializeOwned>
             .map(|(i, label)| (label, i))
             .collect();
 
+        let bin_edges = NullableCategoricalBinEdges::new(idx_map);
+
         Ok(NullableBaselineCategoricalBins {
             baseline_bins: baseline_hist,
-            idx_map,
-            total_n: n,
-            null_n,
+            bin_edges,
+            total_samples,
+            null_samples,
         })
     }
 }

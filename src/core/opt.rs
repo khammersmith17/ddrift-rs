@@ -1,20 +1,5 @@
 use super::{CategoricalBinEdges, ContinuousBinEdges};
-
-const MIN_EXAMPLES_PER_THREAD: usize = 10_000_usize;
-
-/// Get the available number of threads.
-/// If the dataset size is less than the number of threads, use a single thread.
-pub(crate) fn get_thread_count(n: usize) -> usize {
-    let Ok(nz_count) = std::thread::available_parallelism() else {
-        return 1;
-    };
-    let c = nz_count.get();
-
-    if c > n {
-        return 1;
-    }
-    c.min((n / MIN_EXAMPLES_PER_THREAD).max(1))
-}
+use crate::constants::get_thread_count;
 
 /*
 * Methods to approximate the distribution histogram across threads.

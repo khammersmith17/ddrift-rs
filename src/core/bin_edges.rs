@@ -27,7 +27,7 @@ impl<T: Float> ContinuousBinEdges<T> {
         /*
          * - Bin edges will be of size num_bins - 2.
          * - The outer bins, or tail bins in the distribution will be reserved for values observed in the
-         *  distribution that fall outsde the bounds of the baseline distribution.
+         *  distribution that fall outsde the mix/max bounds of the baseline distribution.
          *  - Bin/quantile size will have its "step" size determined by evenly diving the difference
          *  between the max and min of the distribution and dividing by the number of bins - 2.
          *  - A value is assigned to a particular quantile if left <= value < right, otherwise it will
@@ -94,10 +94,58 @@ impl<T: Float> ContinuousBinEdges<T> {
     }
 }
 
-/// Utility wrapper type to encapsulate bin resolution when approximating an entire dataset.
-pub struct CategoricalBinEdges<'a, T: Hash + Ord + Clone>(pub &'a ahash::HashMap<T, usize>);
+#[derive(Debug, PartialEq, Clone)]
+pub struct NullableContinuousBinEdges<T: Float> {
+    inner: ContinuousBinEdges<T>,
+}
 
-impl<T: Hash + Ord + Clone> CategoricalBinEdges<'_, T> {
+impl<T: Float> NullableContinuousBinEdges<T> {
+    pub(crate) fn new(inner: ContinuousBinEdges<T>) -> NullableContinuousBinEdges<T> {
+        Self { inner }
+    }
+
+    pub(crate) fn inner_ref(&self) -> &ContinuousBinEdges<T> {
+        &self.inner
+    }
+
+    pub fn resolve_bin(&self, sample: Option<T>) -> Option<usize> {
+        if let Some(concrete_sample) = sample {
+            Some(self.inner.resolve_bin(concrete_sample))
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn n_bins(&self) -> usize {
+        self.inner.n_bins
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    pub(crate) fn export_edges(&self) -> Vec<T> {
+        self.inner.bin_edges.clone()
+    }
+
+    pub(crate) fn take_edges(self) -> Vec<T> {
+        self.inner.take_edges()
+    }
+}
+
+/// Utility wrapper type to encapsulate bin resolution when approximating an entire dataset.
+#[derive(Clone, Debug)]
+pub struct CategoricalBinEdges<T: Hash + Ord + Clone>(pub ahash::HashMap<T, usize>);
+
+impl<T: Hash + Ord + Clone> CategoricalBinEdges<T> {
+    pub fn new(idx_map: ahash::HashMap<T, usize>) -> CategoricalBinEdges<T> {
+        Self(idx_map)
+    }
+
+    pub fn inner_ref(&self) -> &ahash::HashMap<T, usize> {
+        &self.0
+    }
+
     pub fn resolve_bin<Q>(&self, key: &Q) -> usize
     where
         T: std::borrow::Borrow<Q>,
@@ -110,7 +158,25 @@ impl<T: Hash + Ord + Clone> CategoricalBinEdges<'_, T> {
         }
     }
 
-    pub fn resolve_bin_opt<Q>(&self, key_opt: &Option<Q>) -> Option<usize>
+    pub(crate) fn n_bins(&self) -> usize {
+        self.0.len() + 1
+    }
+}
+
+/// Utility wrapper type to encapsulate bin resolution when approximating an entire dataset.
+#[derive(Clone, Debug)]
+pub struct NullableCategoricalBinEdges<T: Hash + Ord + Clone>(pub ahash::HashMap<T, usize>);
+
+impl<T: Hash + Ord + Clone> NullableCategoricalBinEdges<T> {
+    pub fn new(idx_map: ahash::HashMap<T, usize>) -> NullableCategoricalBinEdges<T> {
+        Self(idx_map)
+    }
+
+    pub fn inner_ref(&self) -> &ahash::HashMap<T, usize> {
+        &self.0
+    }
+
+    pub fn resolve_bin<Q>(&self, key_opt: &Option<Q>) -> Option<usize>
     where
         T: std::borrow::Borrow<Q>,
         Q: Hash + Eq,

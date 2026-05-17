@@ -67,7 +67,7 @@ impl<T: Float + DeserializeOwned> LoadDataDriftExport for NullableContinuousDrif
 pub struct CategoricalDriftBaselineExport {
     pub baseline_hist: Vec<f64>,
     pub baseline_values: Vec<Value>,
-    pub n: f64,
+    pub sample_size: f64,
 }
 
 impl LoadDataDriftExport for CategoricalDriftBaselineExport {}
@@ -86,8 +86,8 @@ impl LoadDataDriftExport for StreamingCategoricalStatefulExport {}
 pub struct NullableCategoricalDriftBaselineExport {
     pub baseline_hist: Vec<f64>,
     pub baseline_values: Vec<Value>,
-    pub n: f64,
-    pub null_n: f64,
+    pub total_samples: f64,
+    pub null_samples: f64,
 }
 
 impl LoadDataDriftExport for NullableCategoricalDriftBaselineExport {}

@@ -1,9 +1,10 @@
 use super::{
     DecayModeMark, DriftComputation, FlushModeMark, NullableDriftComputation,
-    NullableDriftComputationMulti, StreamingDataDriftMark, constants, stream_mode::StreamModeInner,
+    NullableDriftComputationMulti, StreamingDataDriftMark, stream_mode::StreamModeInner,
 };
 use crate::{
     baseline::continuous::{BaselineContinuousBins, NullableBaselineContinuousBins},
+    constants,
     core::{
         compute_dataset_from_bins_continuous, compute_dataset_from_bins_continuous_null_parallel,
         distribution::QuantileType,
@@ -328,7 +329,7 @@ impl<T: Float + Send + Sync> NullableContinuousDataDrift<T> {
         self.n = runtime_data.len() as f64;
         let (bins, null_count) = compute_dataset_from_bins_continuous_null_parallel(
             runtime_data,
-            &self.baseline.bin_edges,
+            &self.baseline.bin_edges(),
         );
         self.null_n = null_count as f64;
         self.rt_bins = bins;
@@ -336,7 +337,7 @@ impl<T: Float + Send + Sync> NullableContinuousDataDrift<T> {
     }
 
     fn clear_rt(&mut self) {
-        self.rt_bins.fill(0.);
+        self.rt_bins.fill(0_f64);
         self.n = 0_f64;
         self.null_n = 0_f64;
     }
