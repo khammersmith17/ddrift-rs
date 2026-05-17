@@ -162,57 +162,6 @@ impl<T: Hash + Ord + Clone, M> DriftContainer for NullableStreamingCategoricalDa
     }
 }
 
-impl<T: Hash + Ord + Clone> NullableStreamingCategoricalDataDrift<T, FlushModeMark> {
-    /// Construct a flush-mode stream. The stream accumulates data until either `flush_size_opt`
-    /// samples have been observed or `flush_cadence_opt` has elapsed since the last flush —
-    /// whichever is reached first — at which point all accumulated runtime data is cleared and
-    /// the window restarts fresh.
-    ///
-    /// `flush_size_opt`: number of accumulated samples that triggers an automatic flush. A lower
-    /// value means more frequent resets and a more responsive signal, but each window contains
-    /// fewer samples making the drift estimate noisier. Defaults to 1,000,000.
-    ///
-    /// `flush_cadence_opt`: time elapsed since the last flush that triggers an automatic flush,
-    /// regardless of sample count. The time check is amortized over batches of 256 pushes to
-    /// avoid reading the clock on every sample. Defaults to 86,400 seconds (24 hours).
-    ///
-    /// Returns [`DriftError::EmptyBaselineData`] if `baseline_data` is empty.
-    pub fn new_flush(
-        baseline_data: &[Option<T>],
-        flush_size_opt: Option<u64>,
-        flush_cadence_opt: Option<Duration>,
-    ) -> Result<NullableStreamingCategoricalDataDrift<T, FlushModeMark>, DriftError> {
-        let baseline = NullableBaselineCategoricalBins::new(baseline_data)?;
-        let bl_hist_len = baseline.baseline_bins.len();
-        let stream_bins: Vec<f64> = vec![0_f64; bl_hist_len];
-        let size = flush_size_opt.unwrap_or(constants::DEFAULT_MAX_STREAM_SIZE);
-        let cadence =
-            flush_cadence_opt.unwrap_or(Duration::new(constants::DEFAULT_STREAM_FLUSH_CADENCE, 0));
-        let mode = StreamModeInner::Flush {
-            size: size as f64,
-            cadence,
-            last_flush_ts: Instant::now(),
-        };
-
-        Ok(NullableStreamingCategoricalDataDrift {
-            stream_bins,
-            baseline,
-            total_stream_size: 0_f64,
-            null_count: 0_f64,
-            mode,
-            _mark: PhantomData,
-        })
-    }
-
-    /// Manually flush the stream, clearing all accumulated runtime data. The baseline is not
-    /// affected. The flush timestamp is reset so the cadence timer restarts from this point.
-    pub fn flush(&mut self) {
-        self.flush_runtime_stream();
-        self.mode
-            .perform_flush(&mut self.stream_bins, &mut self.total_stream_size);
-    }
-}
-
 impl<T: Hash + Ord + Clone + serde::de::DeserializeOwned>
     NullableStreamingCategoricalDataDrift<T, FlushModeMark>
 {
@@ -349,6 +298,61 @@ impl<T: Hash + Ord + Clone + serde::Serialize, M: StreamingDataDriftMark>
     }
 }
 
+impl<T: Hash + Ord + Clone> NullableStreamingCategoricalDataDrift<T, FlushModeMark> {
+    /// Construct a flush-mode stream. The stream accumulates data until either `flush_size_opt`
+    /// samples have been observed or `flush_cadence_opt` has elapsed since the last flush —
+    /// whichever is reached first — at which point all accumulated runtime data is cleared and
+    /// the window restarts fresh.
+    ///
+    /// `flush_size_opt`: number of accumulated samples that triggers an automatic flush. A lower
+    /// value means more frequent resets and a more responsive signal, but each window contains
+    /// fewer samples making the drift estimate noisier. Defaults to 1,000,000.
+    ///
+    /// `flush_cadence_opt`: time elapsed since the last flush that triggers an automatic flush,
+    /// regardless of sample count. The time check is amortized over batches of 256 pushes to
+    /// avoid reading the clock on every sample. Defaults to 86,400 seconds (24 hours).
+    ///
+    /// Returns [`DriftError::EmptyBaselineData`] if `baseline_data` is empty.
+    pub fn new_flush(
+        baseline_data: &[Option<T>],
+        flush_size_opt: Option<u64>,
+        flush_cadence_opt: Option<Duration>,
+    ) -> Result<NullableStreamingCategoricalDataDrift<T, FlushModeMark>, DriftError> {
+        let baseline = NullableBaselineCategoricalBins::new(baseline_data)?;
+        let bl_hist_len = baseline.baseline_bins.len();
+        let stream_bins: Vec<f64> = vec![0_f64; bl_hist_len];
+        let size = flush_size_opt.unwrap_or(constants::DEFAULT_MAX_STREAM_SIZE);
+        let cadence =
+            flush_cadence_opt.unwrap_or(Duration::new(constants::DEFAULT_STREAM_FLUSH_CADENCE, 0));
+        let mode = StreamModeInner::Flush {
+            size: size as f64,
+            cadence,
+            last_flush_ts: Instant::now(),
+        };
+
+        Ok(NullableStreamingCategoricalDataDrift {
+            stream_bins,
+            baseline,
+            total_stream_size: 0_f64,
+            null_count: 0_f64,
+            mode,
+            _mark: PhantomData,
+        })
+    }
+
+    /// Manually flush the stream, clearing all accumulated runtime data. The baseline is not
+    /// affected. The flush timestamp is reset so the cadence timer restarts from this point.
+    pub fn flush(&mut self) {
+        self.flush_runtime_stream();
+        self.mode
+            .perform_flush(&mut self.stream_bins, &mut self.total_stream_size);
+    }
+
+    pub fn last_flush(&self) -> u64 {
+        self.mode.last_flush()
+    }
+}
+
 impl<T: Hash + Ord + Clone> NullableStreamingCategoricalDataDrift<T, DecayModeMark> {
     /// Construct a decay-mode stream. On each [`compute_drift`] or
     /// [`compute_drift_multiple_criteria`] call, all bin counts and `total_stream_size` are
@@ -478,12 +482,6 @@ impl<T: Hash + Ord + Clone, M: StreamingDataDriftMark> NullableStreamingCategori
     /// reflects the effective (decayed) sample count rather than the raw push count.
     pub fn total_samples(&self) -> usize {
         self.total_stream_size.floor() as usize
-    }
-
-    /// Returns the number of seconds elapsed since the last flush. Returns `0` in decay mode
-    /// as flush semantics do not apply.
-    pub fn last_flush(&self) -> u64 {
-        self.mode.last_flush()
     }
 
     /// Export a point-in-time snapshot of the stream as a map from label to raw (un-normalized)
@@ -869,6 +867,10 @@ impl<T: Hash + Ord + Clone> StreamingCategoricalDataDrift<T, FlushModeMark> {
         self.mode
             .perform_flush(&mut self.stream_bins, &mut self.total_stream_size);
     }
+
+    pub fn last_flush(&self) -> u64 {
+        self.mode.last_flush()
+    }
 }
 
 impl<T: Hash + Ord + Clone + serde::de::DeserializeOwned>
@@ -1146,12 +1148,6 @@ impl<T: Hash + Ord + Clone, M: StreamingDataDriftMark> StreamingCategoricalDataD
     /// reflects the effective (decayed) sample count rather than the raw push count.
     pub fn total_samples(&self) -> usize {
         self.total_stream_size.floor() as usize
-    }
-
-    /// Returns the number of seconds elapsed since the last flush. Returns `0` in decay mode
-    /// as flush semantics do not apply.
-    pub fn last_flush(&self) -> u64 {
-        self.mode.last_flush()
     }
 
     /// Export a point-in-time snapshot of the stream as a map from label to raw (un-normalized)
