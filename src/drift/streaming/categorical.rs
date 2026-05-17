@@ -230,7 +230,6 @@ impl<T: Hash + Ord + Clone> NullableStreamingCategoricalDataDrift<T, FlushModeMa
     /// Manually flush the stream, clearing all accumulated runtime data. The baseline is not
     /// affected. The flush timestamp is reset so the cadence timer restarts from this point.
     pub fn flush(&mut self) {
-        self.flush_runtime_stream();
         self.mode
             .perform_flush(&mut self.stream_bins, &mut self.total_stream_size);
     }
@@ -394,11 +393,6 @@ impl<T: Hash + Ord + Clone, M: StreamingDataDriftMark> NullableStreamingCategori
 
     fn init_stream_bins(&mut self) {
         self.stream_bins = vec![0_f64; self.baseline.baseline_bins.len()]
-    }
-
-    fn flush_runtime_stream(&mut self) {
-        self.stream_bins.fill(0_f64);
-        self.total_stream_size = 0_f64;
     }
 
     pub fn num_bins(&self) -> usize {

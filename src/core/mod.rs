@@ -49,7 +49,12 @@ pub(crate) fn compute_dataset_from_bins_categorical_parallel<'a, T: Hash + Ord +
     dataset: &'a [T],
     edges: &'a CategoricalBinEdges<T>,
 ) -> Vec<f64> {
-    opt::categorical::parallel_approx_dataset(dataset, edges)
+    let thread_count = get_thread_count(dataset.len());
+    if thread_count > 1 {
+        opt::categorical::parallel_approx_dataset(dataset, edges)
+    } else {
+        compute_dataset_from_bins_categorical(dataset, edges)
+    }
 }
 
 pub(crate) fn compute_dataset_from_nullable_bins_categorical<'a, T: Hash + Ord + Clone>(

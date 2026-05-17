@@ -43,7 +43,7 @@ impl<T: Float, M> DriftContainer for NullableStreamingContinuousDataDrift<T, M> 
     }
 
     fn runtime_sample_size(&self) -> f64 {
-        self.total_stream_size
+        self.total_stream_size - self.null_count
     }
 
     fn baseline_sample_size(&self) -> f64 {
@@ -143,23 +143,26 @@ impl<T: Float + serde::de::DeserializeOwned>
     }
 
     pub fn new_from_stateful_export(
-        export: export::StreamingContinuousStatefulExport<T>,
-    ) -> Result<StreamingContinuousDataDrift<T, DecayModeMark>, DriftExportError> {
-        let export::StreamingContinuousStatefulExport {
+        export: export::NullableStreamingContinuousStatefulExport<T>,
+    ) -> Result<NullableStreamingContinuousDataDrift<T, DecayModeMark>, DriftExportError> {
+        let export::NullableStreamingContinuousStatefulExport {
             baseline: baseline_export,
             stream_mode,
             stream_bins,
+            total_samples,
+            null_samples,
         } = export;
         let mode: StreamModeInner = stream_mode.into();
-        let baseline = BaselineContinuousBins::new_from_export(baseline_export)?;
+        let baseline = NullableBaselineContinuousBins::new_from_export(baseline_export)?;
 
         if matches!(mode, StreamModeInner::Flush { .. }) {
             return Err(DriftExportError::InvalidDriftMode);
         }
-        Ok(StreamingContinuousDataDrift {
+        Ok(NullableStreamingContinuousDataDrift {
             baseline,
             stream_bins,
-            total_stream_size: 0_f64,
+            total_stream_size: total_samples,
+            null_count: null_samples,
             mode,
             _mark: PhantomData,
         })
@@ -170,46 +173,50 @@ impl<T: Float + serde::de::DeserializeOwned>
     NullableStreamingContinuousDataDrift<T, FlushModeMark>
 {
     pub fn new_from_base_export(
-        export: export::StreamingContinuousBaseExport<T>,
-    ) -> Result<StreamingContinuousDataDrift<T, FlushModeMark>, DriftExportError> {
-        let export::StreamingContinuousBaseExport {
+        export: export::NullableStreamingContinuousBaseExport<T>,
+    ) -> Result<NullableStreamingContinuousDataDrift<T, FlushModeMark>, DriftExportError> {
+        let export::NullableStreamingContinuousBaseExport {
             baseline: baseline_export,
             stream_mode,
         } = export;
         let mode: StreamModeInner = stream_mode.into();
-        let baseline = BaselineContinuousBins::new_from_export(baseline_export)?;
+        let baseline = NullableBaselineContinuousBins::new_from_export(baseline_export)?;
 
         if matches!(mode, StreamModeInner::ExponentialDecay(_)) {
             return Err(DriftExportError::InvalidDriftMode);
         }
         let n_bins = baseline.n_bins();
-        Ok(StreamingContinuousDataDrift {
+        Ok(NullableStreamingContinuousDataDrift {
             baseline,
             stream_bins: vec![0_f64; n_bins],
             total_stream_size: 0_f64,
+            null_count: 0_f64,
             mode,
             _mark: PhantomData,
         })
     }
 
     pub fn new_from_stateful_export(
-        export: export::StreamingContinuousStatefulExport<T>,
-    ) -> Result<StreamingContinuousDataDrift<T, FlushModeMark>, DriftExportError> {
-        let export::StreamingContinuousStatefulExport {
+        export: export::NullableStreamingContinuousStatefulExport<T>,
+    ) -> Result<NullableStreamingContinuousDataDrift<T, FlushModeMark>, DriftExportError> {
+        let export::NullableStreamingContinuousStatefulExport {
             baseline: baseline_export,
             stream_mode,
             stream_bins,
+            total_samples,
+            null_samples,
         } = export;
         let mode: StreamModeInner = stream_mode.into();
-        let baseline = BaselineContinuousBins::new_from_export(baseline_export)?;
+        let baseline = NullableBaselineContinuousBins::new_from_export(baseline_export)?;
 
         if matches!(mode, StreamModeInner::ExponentialDecay(_)) {
             return Err(DriftExportError::InvalidDriftMode);
         }
-        Ok(StreamingContinuousDataDrift {
+        Ok(NullableStreamingContinuousDataDrift {
             baseline,
             stream_bins,
-            total_stream_size: 0_f64,
+            total_stream_size: total_samples,
+            null_count: null_samples,
             mode,
             _mark: PhantomData,
         })

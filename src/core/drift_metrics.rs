@@ -11,7 +11,7 @@ pub enum ContinuousDriftType {
     PopulationStabilityIndex,
     WassersteinDistance,
     KullbackLeibler,
-    KolmorgorovSmirnov,
+    KolmogorovSmirnov,
     Hellinger,
 }
 
@@ -25,7 +25,7 @@ impl TryFrom<&str> for ContinuousDriftType {
             "PopulationStabilityIndex" => Ok(Self::PopulationStabilityIndex),
             "WassersteinDistance" => Ok(Self::WassersteinDistance),
             "KullbackLeibler" => Ok(Self::KullbackLeibler),
-            "KolmorgorovSmirnov" => Ok(Self::KolmorgorovSmirnov),
+            "KolmogorovSmirnov" => Ok(Self::KolmogorovSmirnov),
             "Hellinger" => Ok(Self::Hellinger),
             _ => Err(Self::Error::UnsupportedDriftType),
         }
@@ -126,8 +126,8 @@ fn continuous_drift_computation<T: DriftContainer>(
         ContinuousDriftType::WassersteinDistance => {
             continuous_wasserstein_distance(bl_bins, bl_pop_size, rt_bins, rt_pop_size)
         }
-        ContinuousDriftType::KolmorgorovSmirnov => {
-            kolmorgorov_smirnov(bl_bins, bl_pop_size, rt_bins, rt_pop_size)
+        ContinuousDriftType::KolmogorovSmirnov => {
+            kolmogorov_smirnov(bl_bins, bl_pop_size, rt_bins, rt_pop_size)
         }
         ContinuousDriftType::Hellinger => hellinger(bl_bins, bl_pop_size, rt_bins, rt_pop_size),
     }
@@ -241,8 +241,8 @@ pub(crate) fn compute_kl_divergence_drift(
         .iter()
         .zip(runtime_bins.iter())
         .map(|(bl, rt)| {
-            let dist_rt = stable_apply_ratio(*bl, bl_recip);
-            let dist_bl = stable_apply_ratio(*rt, rt_recip);
+            let dist_bl = stable_apply_ratio(*bl, bl_recip);
+            let dist_rt = stable_apply_ratio(*rt, rt_recip);
             dist_bl * (dist_bl / dist_rt).max(STABILITY_EPS).ln()
         })
         .sum()
@@ -412,7 +412,7 @@ fn chi_squared(
 ///
 /// Expects unnormalized bin counts and population sizes for both groups.
 #[inline]
-fn kolmorgorov_smirnov(baseline_hist: &[f64], bl_n: f64, runtime_hist: &[f64], rt_n: f64) -> f64 {
+fn kolmogorov_smirnov(baseline_hist: &[f64], bl_n: f64, runtime_hist: &[f64], rt_n: f64) -> f64 {
     debug_assert_eq!(baseline_hist.len(), runtime_hist.len());
 
     let mut ks = 0_f64;

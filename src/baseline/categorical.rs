@@ -63,7 +63,7 @@ impl<T: Hash + Ord + Clone + serde::de::DeserializeOwned> TryFrom<CategoricalDri
             sample_size,
         } = export;
 
-        if baseline_hist.len() - 1 != baseline_values.len() {
+        if baseline_hist.is_empty() || baseline_hist.len() - 1 != baseline_values.len() {
             return Err(DriftExportError::InvalidDataShape);
         }
         let mut labels: BTreeSet<T> = BTreeSet::new();
@@ -258,7 +258,7 @@ impl<T: Hash + Ord + Clone + serde::de::DeserializeOwned>
             null_samples,
         } = export;
 
-        if baseline_hist.len() - 1 != baseline_values.len() {
+        if baseline_hist.is_empty() || baseline_hist.len() - 1 != baseline_values.len() {
             return Err(DriftExportError::InvalidDataShape);
         }
         let mut labels: BTreeSet<T> = BTreeSet::new();

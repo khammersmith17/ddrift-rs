@@ -1,7 +1,7 @@
 use crate::{
     core::{
         bin_edges::{ContinuousBinEdges, NullableContinuousBinEdges},
-        compute_dataset_from_bins_continuous, compute_new_hist_prob,
+        compute_dataset_from_bins_continuous,
         distribution::{MIN_BIN_CLAMP, QuantileType},
         error::{DriftError, DriftExportError},
     },
@@ -20,7 +20,7 @@ fn dataset_contains_nans<T: Float>(data: &[T]) -> bool {
 fn sort_baseline_data_opt<T: Float>(data: &[Option<T>]) -> Result<(Vec<T>, usize), DriftError> {
     // Take user data, filter Nones.
     // Clone is to not mangle users data.
-    let mut non_none: Vec<T> = data.iter().filter_map(|entry| entry.clone()).collect();
+    let mut non_none: Vec<T> = data.iter().filter_map(|entry| *entry).collect();
 
     // NaNs should be represented as None.
     if dataset_contains_nans(&non_none) {
@@ -307,10 +307,8 @@ impl<T: Float + Send + Sync> BaselineContinuousBins<T> {
             self.quantile_type,
         );
 
-        self.baseline_hist = compute_new_hist_prob(
-            baseline_data.len(),
-            &compute_dataset_from_bins_continuous(baseline_data, &self.bin_edges),
-        )?;
+        self.baseline_hist = compute_dataset_from_bins_continuous(baseline_data, &self.bin_edges);
+        self.sample_size = baseline_data.len() as f64;
         Ok(())
     }
 }

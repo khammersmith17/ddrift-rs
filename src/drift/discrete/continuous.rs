@@ -167,6 +167,7 @@ impl<T: Float + Send + Sync> ContinuousDataDrift<T> {
         }
         self.rt_bins =
             compute_dataset_from_bins_continuous(runtime_data, &self.baseline.bin_edges());
+        self.sample_size = runtime_data.len() as f64;
         Ok(())
     }
 

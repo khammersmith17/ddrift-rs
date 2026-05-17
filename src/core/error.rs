@@ -1,5 +1,6 @@
 use thiserror::Error;
 
+#[non_exhaustive]
 #[derive(Debug, Error)]
 pub enum DriftError {
     #[error("Data used for runtime drift analysis must be non empty")]
@@ -24,6 +25,7 @@ pub enum DriftError {
     NoEntryFound,
 }
 
+#[non_exhaustive]
 #[derive(Debug, Error)]
 pub enum DriftExportError {
     #[error("Data shapes in baseline are invalid")]

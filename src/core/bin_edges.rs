@@ -37,7 +37,7 @@ impl<T: Float> ContinuousBinEdges<T> {
         let mut bin_edges = vec![T::zero(); n_bins - 2];
         let n = dataset.len();
         let n_0 = dataset[0];
-        let bin_step = (dataset[n - 1] - n_0) / T::from(n).unwrap();
+        let bin_step = (dataset[n - 1] - n_0) / T::from(n_bins).unwrap();
         let mut edge_value = n_0;
 
         for edge in bin_edges.iter_mut() {
