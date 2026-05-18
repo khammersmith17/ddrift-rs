@@ -63,14 +63,14 @@ pub fn compute_drift_categorical_distribution<T: Hash + Ord + Clone>(
 /// Performs the same computation as [`compute_drift_categorical_distribution`], but if the type is
 /// Sync, it can be optimized to perform the bin assignment across many cores. The is method
 /// provides that functionaliy.
-pub fn compute_drift_categorical_distribution_sync<T: Hash + Ord + Clone + Sync>(
+pub fn compute_drift_categorical_distribution_par<T: Hash + Ord + Clone + Sync>(
     baseline_distribution: &[T],
     candidate_distribution: &[T],
     drift_metrics: &[CategoricalDriftType],
 ) -> Result<Vec<DriftComputation<CategoricalDriftType>>, DriftError> {
     let mut drift_container = CategoricalDataDrift::new(baseline_distribution)?;
-    let drift_res =
-        drift_container.compute_drift_multiple_criteria(candidate_distribution, drift_metrics)?;
+    let drift_res = drift_container
+        .compute_drift_multiple_criteria_par(candidate_distribution, drift_metrics)?;
     Ok(drift_res)
 }
 

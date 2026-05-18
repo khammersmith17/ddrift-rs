@@ -310,7 +310,7 @@ impl<T: Hash + Ord + Clone> CategoricalDataDrift<T> {
             return Err(DriftError::EmptyRuntimeData);
         }
         self.rt_bins =
-            compute_dataset_from_bins_categorical(runtime_data, self.baseline.bin_edges());
+            compute_dataset_from_bins_categorical_parallel(runtime_data, self.baseline.bin_edges());
         Ok(())
     }
 
