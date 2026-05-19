@@ -1,5 +1,6 @@
 pub mod baseline;
 pub(crate) mod constants;
+pub mod contract;
 pub mod core;
 pub mod drift;
 pub mod export;
