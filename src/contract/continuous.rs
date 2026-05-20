@@ -113,10 +113,7 @@ impl NullableContinuousDriftContract {
         null_percentage: f64,
         results: &[DriftComputation<ContinuousDriftType>],
     ) -> bool {
-        if self
-            .null_percentage
-            .map_or(false, |t| null_percentage > t)
-        {
+        if self.null_percentage.map_or(false, |t| null_percentage > t) {
             return false;
         }
         results.iter().all(|r| {
@@ -175,10 +172,7 @@ impl NullableContinuousDriftContractBuilder {
         self
     }
 
-    pub fn with_kolmogorov_smirnov(
-        mut self,
-        value: f64,
-    ) -> NullableContinuousDriftContractBuilder {
+    pub fn with_kolmogorov_smirnov(mut self, value: f64) -> NullableContinuousDriftContractBuilder {
         self.kolmogorov_smirnov = Some(value);
         self
     }

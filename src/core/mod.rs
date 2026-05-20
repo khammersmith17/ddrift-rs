@@ -1,4 +1,5 @@
 pub mod bin_edges;
+pub mod dataset_view;
 pub mod distribution;
 pub mod drift_metrics;
 pub mod error;
@@ -147,7 +148,6 @@ pub(crate) fn categorical_derive_baseline_state<T: Hash + Ord + Clone>(
     if baseline_dataset.is_empty() {
         return Err(DriftError::EmptyBaselineData);
     }
-    let n = baseline_dataset.len() as f64;
 
     let mut initial_bins: BTreeMap<T, f64> = BTreeMap::new();
     for cat in baseline_dataset.iter() {
@@ -165,7 +165,7 @@ pub(crate) fn categorical_derive_baseline_state<T: Hash + Ord + Clone>(
 
     for (i, (key, count)) in initial_bins.into_iter().enumerate() {
         idx_map.insert(key, i);
-        baseline_bins[i] = count / n;
+        baseline_bins[i] = count;
     }
     Ok((idx_map, baseline_bins))
 }

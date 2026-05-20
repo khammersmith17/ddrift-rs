@@ -1,0 +1,78 @@
+use crate::baseline::{
+    BaselineCategoricalBins, BaselineContinuousBins, NullableBaselineCategoricalBins,
+    NullableBaselineContinuousBins,
+};
+use crate::core::bin_edges::{CategoricalBinEdges, NullableCategoricalBinEdges};
+use ahash::{HashMap, HashMapExt};
+use num_traits::Float;
+use std::hash::Hash;
+
+pub struct CategoricalDatasetView<T: Ord + Clone + Hash> {
+    pub size: usize,
+    pub bin_counts: HashMap<T, usize>,
+}
+
+impl<T: Ord + Clone + Hash> From<BaselineCategoricalBins<T>> for CategoricalDatasetView<T> {
+    fn from(baseline: BaselineCategoricalBins<T>) -> CategoricalDatasetView<T> {
+        let BaselineCategoricalBins {
+            bin_edges,
+            sample_size,
+            baseline_bins,
+        } = baseline;
+        let CategoricalBinEdges(mut idx_map) = bin_edges;
+        // For each key, the index in idx_map can be used to resolve the offset in the bin vector
+        // of where the value count is stored.
+        for (_key, idx) in idx_map.iter_mut() {
+            let value_count = baseline_bins[*idx];
+            *idx = value_count as usize;
+        }
+        CategoricalDatasetView {
+            bin_counts: idx_map,
+            size: sample_size as usize,
+        }
+    }
+}
+
+pub struct NullableCategoricalDatasetView<T: Ord + Clone + Hash> {
+    pub size: usize,
+    pub bin_counts: HashMap<T, usize>,
+    pub null_count: usize,
+}
+
+impl<T: Ord + Clone + Hash> From<NullableBaselineCategoricalBins<T>>
+    for NullableCategoricalDatasetView<T>
+{
+    fn from(baseline: NullableBaselineCategoricalBins<T>) -> NullableCategoricalDatasetView<T> {
+        let NullableBaselineCategoricalBins {
+            bin_edges,
+            total_samples,
+            null_samples,
+            baseline_bins,
+        } = baseline;
+        let NullableCategoricalBinEdges(mut idx_map) = bin_edges;
+        // For each key, the index in idx_map can be used to resolve the offset in the bin vector
+        // of where the value count is stored.
+        for (_key, idx) in idx_map.iter_mut() {
+            let value_count = baseline_bins[*idx];
+            *idx = value_count as usize;
+        }
+        NullableCategoricalDatasetView {
+            bin_counts: idx_map,
+            size: total_samples as usize,
+            null_count: null_samples as usize,
+        }
+    }
+}
+
+pub struct ContinuousDatasetView<T: Float> {
+    pub quantiles_bin: Vec<T>,
+    pub bin_edges: Vec<T>,
+    pub size: usize,
+}
+
+pub struct NullableContinuousDatasetView<T: Float> {
+    pub quantiles_bin: Vec<T>,
+    pub bin_edges: Vec<T>,
+    pub size: usize,
+    pub null_count: usize,
+}
