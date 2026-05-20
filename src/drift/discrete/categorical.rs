@@ -22,6 +22,20 @@ pub struct NullableCategoricalDataDrift<T: Hash + Ord + Clone> {
     null_n: f64,
 }
 
+impl<T: Hash + Ord + Clone> From<NullableBaselineCategoricalBins<T>>
+    for NullableCategoricalDataDrift<T>
+{
+    fn from(baseline: NullableBaselineCategoricalBins<T>) -> NullableCategoricalDataDrift<T> {
+        let rt_bins = vec![0_f64; baseline.n_bins()];
+        NullableCategoricalDataDrift {
+            baseline,
+            rt_bins,
+            n: 0_f64,
+            null_n: 0_f64,
+        }
+    }
+}
+
 impl<T: Hash + Ord + Clone> DriftContainer for NullableCategoricalDataDrift<T> {
     fn baseline_bins(&self) -> &[f64] {
         self.baseline.get_baseline_hist()
@@ -130,6 +144,17 @@ pub struct CategoricalDataDrift<T: Hash + Ord + Clone> {
     pub(crate) baseline: BaselineCategoricalBins<T>,
     rt_bins: Vec<f64>,
     sample_size: f64,
+}
+
+impl<T: Hash + Ord + Clone> From<BaselineCategoricalBins<T>> for CategoricalDataDrift<T> {
+    fn from(baseline: BaselineCategoricalBins<T>) -> CategoricalDataDrift<T> {
+        let rt_bins = vec![0_f64; baseline.n_bins()];
+        CategoricalDataDrift {
+            baseline,
+            rt_bins,
+            sample_size: 0_f64,
+        }
+    }
 }
 
 impl<T: Hash + Ord + Clone> DriftContainer for CategoricalDataDrift<T> {
@@ -349,7 +374,15 @@ impl<T: Hash + Ord + Clone + serde::Serialize> CategoricalDataDrift<T> {
     pub fn export_baseline_state(
         self,
     ) -> Result<export::CategoricalDriftBaselineExport, serde_json::Error> {
-        self.baseline.try_into()
+        export::CategoricalDriftBaselineExport::try_from(self.baseline)
+    }
+}
+
+impl<T: Hash + Ord + Clone + serde::Serialize> NullableCategoricalDataDrift<T> {
+    pub fn export_baseline_state(
+        self,
+    ) -> Result<export::NullableCategoricalDriftBaselineExport, serde_json::Error> {
+        export::NullableCategoricalDriftBaselineExport::try_from(self.baseline)
     }
 }
 

@@ -44,6 +44,18 @@ pub struct ContinuousDataDrift<T: Float> {
     sample_size: f64,
 }
 
+impl<T: Float> From<BaselineContinuousBins<T>> for ContinuousDataDrift<T> {
+    fn from(baseline: BaselineContinuousBins<T>) -> ContinuousDataDrift<T> {
+        let rt_bins = vec![0_f64; baseline.n_bins()];
+        let sample_size = 0_f64;
+        ContinuousDataDrift {
+            baseline,
+            rt_bins,
+            sample_size,
+        }
+    }
+}
+
 impl<T: Float> DriftContainer for ContinuousDataDrift<T> {
     fn baseline_bins(&self) -> &[f64] {
         &self.baseline.baseline_bins()
@@ -206,6 +218,21 @@ pub struct NullableContinuousDataDrift<T: Float> {
     rt_bins: Vec<f64>,
     n: f64,
     null_n: f64,
+}
+
+impl<T: Float> From<NullableBaselineContinuousBins<T>> for NullableContinuousDataDrift<T> {
+    fn from(baseline: NullableBaselineContinuousBins<T>) -> NullableContinuousDataDrift<T> {
+        let rt_bins = vec![0_f64; baseline.n_bins()];
+        let n = 0_f64;
+        let null_n = 0_f64;
+
+        NullableContinuousDataDrift {
+            baseline,
+            rt_bins,
+            n,
+            null_n,
+        }
+    }
 }
 
 impl<T: Float> DriftContainer for NullableContinuousDataDrift<T> {

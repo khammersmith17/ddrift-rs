@@ -3,7 +3,7 @@ use crate::baseline::{
     NullableBaselineContinuousBins,
 };
 use crate::core::bin_edges::{CategoricalBinEdges, NullableCategoricalBinEdges};
-use ahash::{HashMap, HashMapExt};
+use ahash::HashMap;
 use num_traits::Float;
 use std::hash::Hash;
 
@@ -65,14 +65,48 @@ impl<T: Ord + Clone + Hash> From<NullableBaselineCategoricalBins<T>>
 }
 
 pub struct ContinuousDatasetView<T: Float> {
-    pub quantiles_bin: Vec<T>,
+    pub quantile_bins: Vec<f64>,
     pub bin_edges: Vec<T>,
     pub size: usize,
 }
 
+impl<T: Float> From<BaselineContinuousBins<T>> for ContinuousDatasetView<T> {
+    fn from(baseline: BaselineContinuousBins<T>) -> ContinuousDatasetView<T> {
+        let BaselineContinuousBins {
+            baseline_hist: quantile_bins,
+            bin_edges: bin_edges_c,
+            sample_size,
+            ..
+        } = baseline;
+        ContinuousDatasetView {
+            quantile_bins,
+            bin_edges: bin_edges_c.bin_edges,
+            size: sample_size as usize,
+        }
+    }
+}
+
 pub struct NullableContinuousDatasetView<T: Float> {
-    pub quantiles_bin: Vec<T>,
+    pub quantile_bins: Vec<f64>,
     pub bin_edges: Vec<T>,
     pub size: usize,
     pub null_count: usize,
+}
+
+impl<T: Float> From<NullableBaselineContinuousBins<T>> for NullableContinuousDatasetView<T> {
+    fn from(baseline: NullableBaselineContinuousBins<T>) -> NullableContinuousDatasetView<T> {
+        let NullableBaselineContinuousBins {
+            baseline_hist: quantile_bins,
+            bin_edges: bin_edges_c,
+            sample_size,
+            null_count,
+            ..
+        } = baseline;
+        NullableContinuousDatasetView {
+            quantile_bins,
+            bin_edges: bin_edges_c.inner.bin_edges,
+            size: sample_size as usize,
+            null_count: null_count as usize,
+        }
+    }
 }

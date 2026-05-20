@@ -52,12 +52,12 @@ fn sort_baseline_data<T: Float>(data: &[T]) -> Result<Vec<T>, DriftError> {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct NullableBaselineContinuousBins<T: Float> {
-    bin_edges: NullableContinuousBinEdges<T>,
-    baseline_hist: Vec<f64>,
-    quantile_type: QuantileType,
-    sample_size: f64,
-    null_count: f64,
+pub struct NullableBaselineContinuousBins<T: Float> {
+    pub(crate) bin_edges: NullableContinuousBinEdges<T>,
+    pub(crate) baseline_hist: Vec<f64>,
+    pub(crate) quantile_type: QuantileType,
+    pub(crate) sample_size: f64,
+    pub(crate) null_count: f64,
 }
 
 impl<T: Float> NullableBaselineContinuousBins<T> {
@@ -94,7 +94,7 @@ impl<T: Float> NullableBaselineContinuousBins<T> {
 }
 
 impl<T: Float + Send + Sync> NullableBaselineContinuousBins<T> {
-    pub(crate) fn new(
+    pub fn new(
         baseline_data: &[Option<T>],
         quantile_type_opt: Option<QuantileType>,
     ) -> Result<NullableBaselineContinuousBins<T>, DriftError> {
@@ -182,11 +182,11 @@ impl<T: Float + serde::de::DeserializeOwned> NullableBaselineContinuousBins<T> {
 // utilities.
 // Also allows for more elegant composition of different usage
 #[derive(Clone, Debug)]
-pub(crate) struct BaselineContinuousBins<T: Float> {
-    bin_edges: ContinuousBinEdges<T>,
-    baseline_hist: Vec<f64>,
-    sample_size: f64,
-    quantile_type: QuantileType,
+pub struct BaselineContinuousBins<T: Float> {
+    pub(crate) bin_edges: ContinuousBinEdges<T>,
+    pub(crate) baseline_hist: Vec<f64>,
+    pub(crate) sample_size: f64,
+    pub(crate) quantile_type: QuantileType,
 }
 
 impl<T: Float + serde::de::DeserializeOwned> TryFrom<ContinuousDriftBaselineExport<T>>
@@ -278,7 +278,7 @@ impl<T: Float> BaselineContinuousBins<T> {
 impl<T: Float + Send + Sync> BaselineContinuousBins<T> {
     // Constructor on a baseline dataset. Allocates then hyrdates with the provided baseline
     // dataset.
-    pub(crate) fn new(
+    pub fn new(
         baseline_data: &[T],
         quantile_resolution: QuantileType,
     ) -> Result<BaselineContinuousBins<T>, DriftError> {

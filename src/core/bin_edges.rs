@@ -4,7 +4,7 @@ use std::hash::Hash;
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct ContinuousBinEdges<T: Float> {
-    bin_edges: Vec<T>,
+    pub(crate) bin_edges: Vec<T>,
     n_bins: usize,
 }
 
@@ -96,7 +96,7 @@ impl<T: Float> ContinuousBinEdges<T> {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct NullableContinuousBinEdges<T: Float> {
-    inner: ContinuousBinEdges<T>,
+    pub(crate) inner: ContinuousBinEdges<T>,
 }
 
 impl<T: Float> NullableContinuousBinEdges<T> {

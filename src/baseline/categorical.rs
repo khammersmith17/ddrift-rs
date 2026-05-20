@@ -21,22 +21,22 @@ use std::hash::Hash;
 // Baseline bins are the histogram generated on baseline data, and other label represents the
 // "other" bucket for when a discrete value not seen in the baseline set is observed.
 #[derive(Clone, Debug)]
-pub(crate) struct BaselineCategoricalBins<T: Hash + Ord + Clone> {
+pub struct BaselineCategoricalBins<T: Hash + Ord + Clone> {
     pub(crate) bin_edges: CategoricalBinEdges<T>,
     pub(crate) baseline_bins: Vec<f64>,
     pub(crate) sample_size: f64,
 }
 
-impl<T: Hash + Ord + Clone + serde::Serialize> TryInto<CategoricalDriftBaselineExport>
-    for BaselineCategoricalBins<T>
+impl<T: Hash + Ord + Clone + serde::Serialize> TryFrom<BaselineCategoricalBins<T>>
+    for CategoricalDriftBaselineExport
 {
     type Error = serde_json::Error;
-    fn try_into(self) -> Result<CategoricalDriftBaselineExport, Self::Error> {
+    fn try_from(baseline: BaselineCategoricalBins<T>) -> Result<Self, Self::Error> {
         let BaselineCategoricalBins {
             bin_edges,
             baseline_bins: baseline_hist,
             sample_size,
-        } = self;
+        } = baseline;
 
         let value_set: BTreeSet<T> = bin_edges.0.into_iter().map(|(key, _)| key).collect();
         let mut baseline_values: Vec<serde_json::Value> = Vec::with_capacity(value_set.len());
@@ -152,17 +152,17 @@ impl<T: Hash + Ord + Clone> BaselineCategoricalBins<T> {
     }
 }
 
-impl<T: Hash + Ord + Clone + serde::Serialize> TryInto<NullableCategoricalDriftBaselineExport>
-    for NullableBaselineCategoricalBins<T>
+impl<T: Hash + Ord + Clone + serde::Serialize> TryFrom<NullableBaselineCategoricalBins<T>>
+    for NullableCategoricalDriftBaselineExport
 {
     type Error = serde_json::Error;
-    fn try_into(self) -> Result<NullableCategoricalDriftBaselineExport, Self::Error> {
+    fn try_from(baseline: NullableBaselineCategoricalBins<T>) -> Result<Self, Self::Error> {
         let NullableBaselineCategoricalBins {
             bin_edges,
             baseline_bins: baseline_hist,
             total_samples,
             null_samples,
-        } = self;
+        } = baseline;
 
         let value_set: BTreeSet<T> = bin_edges.0.into_iter().map(|(key, _)| key).collect();
         let mut baseline_values: Vec<serde_json::Value> = Vec::with_capacity(value_set.len());
