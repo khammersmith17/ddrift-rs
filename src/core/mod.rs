@@ -85,21 +85,6 @@ pub(crate) fn compute_dataset_from_bins_categorical<'a, T: Hash + Ord + Clone>(
     hist
 }
 
-// Take the baseline bin counts and compute the proportional bin sizes based on total population
-// size.
-#[inline]
-pub(crate) fn compute_new_hist_prob(
-    num_items: usize,
-    hist: &[f64],
-) -> Result<Vec<f64>, DriftError> {
-    let total_n = num_items as f64;
-    if total_n == 0_f64 {
-        return Err(DriftError::EmptyRuntimeData);
-    }
-    let bl_hist = hist.iter().map(|n| *n / total_n).collect::<Vec<f64>>();
-    Ok(bl_hist)
-}
-
 /// Defines the lookup map for nullable categorical fields, and constructs the baseline histogram for drift
 /// at "runtime".
 pub(crate) fn nullable_categorical_derive_baseline_state<T: Hash + Ord + Clone>(
@@ -168,16 +153,4 @@ pub(crate) fn categorical_derive_baseline_state<T: Hash + Ord + Clone>(
         baseline_bins[i] = count;
     }
     Ok((idx_map, baseline_bins))
-}
-
-#[cfg(test)]
-mod core_drift_test {
-    use super::*;
-    #[test]
-    fn test_new_hist_prob() {
-        let bl_hist = vec![10.0, 20.0, 30.0, 40.0];
-        let base: Vec<f64> = vec![0.10, 0.20, 0.30, 0.40];
-        let test_bins = compute_new_hist_prob(100, &bl_hist).unwrap();
-        assert_eq!(base, test_bins);
-    }
 }

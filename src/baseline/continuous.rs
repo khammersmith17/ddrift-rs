@@ -83,10 +83,6 @@ impl<T: Float> NullableBaselineContinuousBins<T> {
         self.bin_edges.resolve_bin(sample)
     }
 
-    pub(crate) fn export_baseline(&self) -> Vec<f64> {
-        self.baseline_hist.clone()
-    }
-
     /// Non-none population size.
     pub(crate) fn population_size(&self) -> f64 {
         self.sample_size - self.null_count
@@ -264,10 +260,6 @@ impl<T: Float> BaselineContinuousBins<T> {
     #[inline]
     pub(crate) fn resolve_bin(&self, sample: T) -> usize {
         self.bin_edges.resolve_bin(sample)
-    }
-
-    pub(crate) fn export_baseline(&self) -> Vec<f64> {
-        self.baseline_hist.clone()
     }
 
     pub(crate) fn population_size(&self) -> f64 {

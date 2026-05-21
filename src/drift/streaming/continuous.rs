@@ -16,7 +16,6 @@ use crate::{
     export,
 };
 
-use ahash::{HashMap, HashMapExt};
 use num_traits::Float;
 use std::{
     marker::PhantomData,
@@ -339,44 +338,6 @@ impl<T: Float, M: StreamingDataDriftMark> NullableStreamingContinuousDataDrift<T
         self.baseline.n_bins()
     }
 
-    /// Export a point-in-time snapshot of the stream state as a map with three keys:
-    ///
-    /// - `"binEdges"`: the histogram bin edge values defining the boundaries between bins.
-    /// - `"baselineBins"`: proportional bin distribution of the baseline dataset.
-    /// - `"streamBins"`: proportional bin distribution of the currently accumulated stream data.
-    ///
-    /// All bin values are normalized to proportions in `[0, 1]`.
-    ///
-    /// Returns [`DriftError::EmptyRuntimeData`] if no data has been accumulated.
-    pub fn export_snapshot(&self) -> Result<HashMap<String, Vec<f64>>, DriftError> {
-        if self.total_stream_size == 0_f64 {
-            return Err(DriftError::EmptyRuntimeData);
-        }
-        // determine snapshot shape
-        let mut table: HashMap<String, Vec<f64>> = HashMap::with_capacity(3);
-        let bin_edges_export = self
-            .baseline
-            .export_bin_edges()
-            .iter()
-            .map(|e| e.to_f64().unwrap())
-            .collect();
-        table.insert("binEdges".into(), bin_edges_export);
-        table.insert("baselineBins".into(), self.export_baseline());
-        let bin_ratio_snapshot = self
-            .stream_bins
-            .iter()
-            .map(|v| *v / self.total_stream_size)
-            .collect();
-        table.insert("streamBins".into(), bin_ratio_snapshot);
-        Ok(table)
-    }
-
-    /// Export the baseline bin proportions. Returns an owned `Vec<f64>`, which contains the
-    /// proportional bin distribution present in the baseline set, and thus what all drift metrics
-    /// are computed with respect to.
-    pub fn export_baseline(&self) -> Vec<f64> {
-        self.baseline.export_baseline()
-    }
 }
 
 /// Streaming drift detector for continuous (floating-point) features. Maintains a running
@@ -738,44 +699,6 @@ impl<T: Float, M: StreamingDataDriftMark> StreamingContinuousDataDrift<T, M> {
         self.baseline.n_bins()
     }
 
-    /// Export a point-in-time snapshot of the stream state as a map with three keys:
-    ///
-    /// - `"binEdges"`: the histogram bin edge values defining the boundaries between bins.
-    /// - `"baselineBins"`: proportional bin distribution of the baseline dataset.
-    /// - `"streamBins"`: proportional bin distribution of the currently accumulated stream data.
-    ///
-    /// All bin values are normalized to proportions in `[0, 1]`.
-    ///
-    /// Returns [`DriftError::EmptyRuntimeData`] if no data has been accumulated.
-    pub fn export_snapshot(&self) -> Result<HashMap<String, Vec<f64>>, DriftError> {
-        if self.total_stream_size == 0_f64 {
-            return Err(DriftError::EmptyRuntimeData);
-        }
-        // determine snapshot shape
-        let mut table: HashMap<String, Vec<f64>> = HashMap::with_capacity(3);
-        let bin_edges_export = self
-            .baseline
-            .export_bin_edges()
-            .iter()
-            .map(|e| e.to_f64().unwrap())
-            .collect();
-        table.insert("binEdges".into(), bin_edges_export);
-        table.insert("baselineBins".into(), self.export_baseline());
-        let bin_ratio_snapshot = self
-            .stream_bins
-            .iter()
-            .map(|v| *v / self.total_stream_size)
-            .collect();
-        table.insert("streamBins".into(), bin_ratio_snapshot);
-        Ok(table)
-    }
-
-    /// Export the baseline bin proportions. Returns an owned `Vec<f64>`, which contains the
-    /// proportional bin distribution present in the baseline set, and thus what all drift metrics
-    /// are computed with respect to.
-    pub fn export_baseline(&self) -> Vec<f64> {
-        self.baseline.export_baseline()
-    }
 }
 
 #[allow(private_bounds)]
@@ -883,25 +806,6 @@ mod continuous_tests {
         assert!(s.is_empty());
         assert_eq!(s.total_samples(), 0);
         assert_eq!(s.stream_bins.len(), s.baseline.baseline_bins().len());
-    }
-
-    #[test]
-    fn continuous_streaming_export_snapshot_empty_returns_err() {
-        let baseline: Vec<f64> = (0..50).map(|i| i as f64).collect();
-        let s = StreamingContinuousDataDrift::new_flush(&baseline, None, None, None).unwrap();
-        assert!(s.export_snapshot().is_err());
-    }
-
-    #[test]
-    fn continuous_streaming_export_snapshot_has_expected_keys() {
-        let baseline: Vec<f64> = (0..50).map(|i| i as f64).collect();
-        let mut s = StreamingContinuousDataDrift::new_flush(&baseline, None, None, None).unwrap();
-        s.update_stream_batch(&[10.0, 20.0, 30.0]).unwrap();
-
-        let snap = s.export_snapshot().unwrap();
-        assert!(snap.contains_key("binEdges"));
-        assert!(snap.contains_key("baselineBins"));
-        assert!(snap.contains_key("streamBins"));
     }
 
     // --- decay mode ---

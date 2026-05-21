@@ -63,7 +63,8 @@ impl<T: Float> ContinuousBinEdges<T> {
         self.bin_edges[self.len() - 1]
     }
 
-    pub(crate) fn len(&self) -> usize {
+    #[inline]
+    fn len(&self) -> usize {
         self.bin_edges.len()
     }
 
@@ -118,10 +119,6 @@ impl<T: Float> NullableContinuousBinEdges<T> {
 
     pub(crate) fn n_bins(&self) -> usize {
         self.inner.n_bins
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.inner.len()
     }
 
     pub(crate) fn export_edges(&self) -> Vec<T> {

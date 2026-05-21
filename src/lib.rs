@@ -227,6 +227,8 @@ mod tests {
         let result =
             compute_drift_categorical_distribution(&baseline, &candidate, &metrics).unwrap();
 
+        dbg!(&result);
+
         assert_eq!(result.len(), 1);
         assert!(result[0].drift_magnitude.abs() < 1e-9);
     }

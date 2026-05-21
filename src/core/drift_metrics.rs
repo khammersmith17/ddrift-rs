@@ -182,8 +182,8 @@ fn categorical_drift_computation<T: DriftContainer>(
 // Derive the bin ratio, applying numerical stablity.
 // Expects the reciprocal of population size count.
 #[inline]
-fn stable_apply_ratio(bin_c: f64, pop_r: f64) -> f64 {
-    ((bin_c * pop_r) + STABILITY_EPS).max(STABILITY_EPS)
+fn stable_apply_ratio(bin_c: f64, pop_recip: f64) -> f64 {
+    ((bin_c * pop_recip) + STABILITY_EPS).max(STABILITY_EPS)
 }
 
 /// Population Stability Index. Measures how much a distribution has shifted relative to a

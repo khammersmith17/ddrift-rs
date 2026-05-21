@@ -132,15 +132,6 @@ impl<T: Hash + Ord + Clone> BaselineCategoricalBins<T> {
         self.sample_size
     }
 
-    /// Export the baseline histogram.
-    pub(crate) fn export_baseline(&self) -> HashMap<T, f64> {
-        self.bin_edges
-            .0
-            .iter()
-            .map(|(feat_name, i)| (feat_name.clone(), self.baseline_bins[*i]))
-            .collect()
-    }
-
     pub(crate) fn n_bins(&self) -> usize {
         self.baseline_bins.len()
     }
@@ -224,15 +215,6 @@ impl<T: Hash + Ord + Clone> NullableBaselineCategoricalBins<T> {
         Q: Hash + Eq,
     {
         self.bin_edges.resolve_bin(key_opt)
-    }
-
-    /// Export the baseline histogram.
-    pub(crate) fn export_baseline(&self) -> HashMap<T, f64> {
-        self.bin_edges
-            .0
-            .iter()
-            .map(|(feat_name, i)| (feat_name.clone(), self.baseline_bins[*i]))
-            .collect()
     }
 
     pub(crate) fn n_bins(&self) -> usize {

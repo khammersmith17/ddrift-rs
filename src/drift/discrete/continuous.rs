@@ -200,11 +200,6 @@ impl<T: Float> ContinuousDataDrift<T> {
         self.baseline.n_bins()
     }
 
-    /// Export the baseline bin proportions. Each value represents the proportion of baseline
-    /// samples that fell into the corresponding bin.
-    pub fn export_baseline(&self) -> Vec<f64> {
-        self.baseline.export_baseline()
-    }
 }
 
 impl<T: Float + serde::Serialize> ContinuousDataDrift<T> {
@@ -368,11 +363,6 @@ impl<T: Float> NullableContinuousDataDrift<T> {
         self.baseline.n_bins()
     }
 
-    /// Export the baseline bin proportions. Each value represents the proportion of non-null
-    /// baseline samples that fell into the corresponding bin.
-    pub fn export_baseline(&self) -> Vec<f64> {
-        self.baseline.export_baseline()
-    }
 }
 
 impl<T: Float + serde::Serialize> NullableContinuousDataDrift<T> {
@@ -384,17 +374,6 @@ impl<T: Float + serde::Serialize> NullableContinuousDataDrift<T> {
 #[cfg(test)]
 mod continuous_test {
     use super::*;
-
-    #[test]
-    fn test_continuous_baseline_builds_expected_bins() {
-        let baseline = [1.0, 2.0, 3.0, 4.0];
-        let psi = ContinuousDataDrift::new_from_baseline(None, &baseline).unwrap();
-
-        let expected_bins = QuantileType::FreedmanDiaconis.compute_num_bins(&baseline);
-
-        assert_eq!(psi.baseline.bin_edges().len(), expected_bins - 2);
-        assert_eq!(psi.rt_bins.len(), expected_bins);
-    }
 
     #[test]
     fn test_continuous_psi_zero_when_no_drift() {
@@ -495,13 +474,4 @@ mod continuous_test {
         assert_eq!(det.rt_bins.len(), det.n_bins());
     }
 
-    // --- export_baseline ---
-
-    #[test]
-    fn continuous_batch_export_baseline_sums_to_one() {
-        let baseline: Vec<f64> = (0..100).map(|i| i as f64).collect();
-        let det = ContinuousDataDrift::new_from_baseline(None, &baseline).unwrap();
-        let sum: f64 = det.export_baseline().iter().sum();
-        assert!((sum - 1.0).abs() < 1e-9);
-    }
 }

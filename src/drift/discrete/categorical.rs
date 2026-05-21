@@ -12,7 +12,6 @@ use crate::{
     drift::{DriftComputation, NullableDriftComputation, NullableDriftComputationMulti},
     export,
 };
-use ahash::HashMap;
 use std::hash::Hash;
 
 pub struct NullableCategoricalDataDrift<T: Hash + Ord + Clone> {
@@ -140,6 +139,7 @@ impl<T: Hash + Ord + Clone> NullableCategoricalDataDrift<T> {
     }
 }
 
+#[derive(Debug)]
 pub struct CategoricalDataDrift<T: Hash + Ord + Clone> {
     pub(crate) baseline: BaselineCategoricalBins<T>,
     rt_bins: Vec<f64>,
@@ -336,6 +336,7 @@ impl<T: Hash + Ord + Clone> CategoricalDataDrift<T> {
         }
         self.rt_bins =
             compute_dataset_from_bins_categorical(runtime_data, self.baseline.bin_edges());
+        self.sample_size = runtime_data.len() as f64;
         Ok(())
     }
 
@@ -357,12 +358,6 @@ impl<T: Hash + Ord + Clone> CategoricalDataDrift<T> {
         // not common path
         self.rt_bins = vec![0_f64; num_bins];
         Ok(())
-    }
-
-    /// Export the baseline label proportions as a map from label to proportion. Each value
-    /// represents the fraction of baseline samples with that label.
-    pub fn export_baseline(&self) -> HashMap<T, f64> {
-        self.baseline.export_baseline()
     }
 
     pub fn num_bins(&self) -> usize {
@@ -496,18 +491,4 @@ mod categorical_test {
         assert_eq!(det.rt_bins.len(), 5); // 4 labels + other
     }
 
-    // --- export_baseline ---
-
-    #[test]
-    fn categorical_batch_export_baseline_contains_all_labels() {
-        let baseline = ["a", "b", "c", "a", "b"];
-        let det = CategoricalDataDrift::new(&baseline).unwrap();
-        let exported = det.export_baseline();
-
-        assert!(exported.contains_key("a"));
-        assert!(exported.contains_key("b"));
-        assert!(exported.contains_key("c"));
-        let sum: f64 = exported.values().sum();
-        assert!((sum - 1.0).abs() < 1e-9);
-    }
 }

@@ -14,7 +14,6 @@ use crate::{
     },
     export,
 };
-use ahash::HashMap;
 use std::{
     hash::Hash,
     marker::PhantomData,
@@ -368,27 +367,6 @@ impl<T: Hash + Ord + Clone, M: StreamingDataDriftMark> NullableStreamingCategori
     /// reflects the effective (decayed) sample count rather than the raw push count.
     pub fn total_samples(&self) -> usize {
         self.total_stream_size.floor() as usize
-    }
-
-    /// Export a point-in-time snapshot of the stream as a map from label to raw (un-normalized)
-    /// bin count. The "other" bin for unseen labels is not included in the returned map.
-    ///
-    /// To compute proportional distributions, divide each value by [`total_samples`].
-    ///
-    /// [`total_samples`]: StreamingCategoricalDataDrift::total_samples
-    pub fn export_snapshot(&self) -> HashMap<T, f64> {
-        self.baseline
-            .bin_edges()
-            .inner_ref()
-            .iter()
-            .map(|(feat_name, i)| (feat_name.clone(), self.stream_bins[*i]))
-            .collect()
-    }
-
-    /// Export the baseline label proportions as a map from label to proportion. Each value
-    /// represents the fraction of baseline samples with that label.
-    pub fn export_baseline(&self) -> HashMap<T, f64> {
-        self.baseline.export_baseline()
     }
 
     fn init_stream_bins(&mut self) {
@@ -755,27 +733,6 @@ impl<T: Hash + Ord + Clone, M: StreamingDataDriftMark> StreamingCategoricalDataD
     /// reflects the effective (decayed) sample count rather than the raw push count.
     pub fn total_samples(&self) -> usize {
         self.total_stream_size.floor() as usize
-    }
-
-    /// Export a point-in-time snapshot of the stream as a map from label to raw (un-normalized)
-    /// bin count. The "other" bin for unseen labels is not included in the returned map.
-    ///
-    /// To compute proportional distributions, divide each value by [`total_samples`].
-    ///
-    /// [`total_samples`]: StreamingCategoricalDataDrift::total_samples
-    pub fn export_snapshot(&self) -> HashMap<T, f64> {
-        self.baseline
-            .bin_edges()
-            .inner_ref()
-            .iter()
-            .map(|(feat_name, i)| (feat_name.clone(), self.stream_bins[*i]))
-            .collect()
-    }
-
-    /// Export the baseline label proportions as a map from label to proportion. Each value
-    /// represents the fraction of baseline samples with that label.
-    pub fn export_baseline(&self) -> HashMap<T, f64> {
-        self.baseline.export_baseline()
     }
 
     fn init_stream_bins(&mut self) {
