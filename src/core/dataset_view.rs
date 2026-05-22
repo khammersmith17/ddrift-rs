@@ -2,7 +2,11 @@ use crate::baseline::{
     BaselineCategoricalBins, BaselineContinuousBins, NullableBaselineCategoricalBins,
     NullableBaselineContinuousBins,
 };
-use crate::core::bin_edges::{CategoricalBinEdges, NullableCategoricalBinEdges};
+use crate::core::{
+    bin_edges::{CategoricalBinEdges, NullableCategoricalBinEdges},
+    distribution::QuantileType,
+    error::DriftError,
+};
 use ahash::HashMap;
 use num_traits::Float;
 use std::hash::Hash;
@@ -30,6 +34,13 @@ impl<T: Ord + Clone + Hash> From<BaselineCategoricalBins<T>> for CategoricalData
             bin_counts: idx_map,
             size: sample_size as usize,
         }
+    }
+}
+
+impl<T: Ord + Hash + Clone> CategoricalDatasetView<T> {
+    pub fn new(dataset: &[T]) -> Result<CategoricalDatasetView<T>, DriftError> {
+        let bl = BaselineCategoricalBins::new(dataset)?;
+        Ok(bl.into())
     }
 }
 
@@ -64,6 +75,13 @@ impl<T: Ord + Clone + Hash> From<NullableBaselineCategoricalBins<T>>
     }
 }
 
+impl<T: Ord + Hash + Clone> NullableCategoricalDatasetView<T> {
+    pub fn new(dataset: &[Option<T>]) -> Result<NullableCategoricalDatasetView<T>, DriftError> {
+        let bl = NullableBaselineCategoricalBins::new(dataset)?;
+        Ok(bl.into())
+    }
+}
+
 pub struct ContinuousDatasetView<T: Float> {
     pub quantile_bins: Vec<f64>,
     pub bin_edges: Vec<T>,
@@ -83,6 +101,16 @@ impl<T: Float> From<BaselineContinuousBins<T>> for ContinuousDatasetView<T> {
             bin_edges: bin_edges_c.bin_edges,
             size: sample_size as usize,
         }
+    }
+}
+
+impl<T: Float + Send + Sync> ContinuousDatasetView<T> {
+    pub fn new(
+        dataset: &[T],
+        quantile_type: Option<QuantileType>,
+    ) -> Result<ContinuousDatasetView<T>, DriftError> {
+        let bl = BaselineContinuousBins::new(dataset, quantile_type)?;
+        Ok(bl.into())
     }
 }
 
@@ -108,5 +136,15 @@ impl<T: Float> From<NullableBaselineContinuousBins<T>> for NullableContinuousDat
             size: sample_size as usize,
             null_count: null_count as usize,
         }
+    }
+}
+
+impl<T: Float + Send + Sync> NullableContinuousDatasetView<T> {
+    pub fn new(
+        dataset: &[Option<T>],
+        quantile_type: Option<QuantileType>,
+    ) -> Result<NullableContinuousDatasetView<T>, DriftError> {
+        let bl = NullableBaselineContinuousBins::new(dataset, quantile_type)?;
+        Ok(bl.into())
     }
 }

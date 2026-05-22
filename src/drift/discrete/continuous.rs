@@ -115,7 +115,7 @@ impl<T: Float + Send + Sync> ContinuousDataDrift<T> {
         bl_slice: &[T],
     ) -> Result<ContinuousDataDrift<T>, DriftError> {
         let sample_size = bl_slice.len() as f64;
-        let baseline = BaselineContinuousBins::new(bl_slice, quantile_type.unwrap_or_default())?;
+        let baseline = BaselineContinuousBins::new(bl_slice, quantile_type)?;
         let rt_bins = vec![0_f64; baseline.baseline_bins().len()];
         Ok(ContinuousDataDrift {
             baseline,
@@ -199,7 +199,6 @@ impl<T: Float> ContinuousDataDrift<T> {
     pub fn n_bins(&self) -> usize {
         self.baseline.n_bins()
     }
-
 }
 
 impl<T: Float + serde::Serialize> ContinuousDataDrift<T> {
@@ -362,7 +361,6 @@ impl<T: Float> NullableContinuousDataDrift<T> {
     pub fn n_bins(&self) -> usize {
         self.baseline.n_bins()
     }
-
 }
 
 impl<T: Float + serde::Serialize> NullableContinuousDataDrift<T> {
@@ -473,5 +471,4 @@ mod continuous_test {
         assert_ne!(det.n_bins(), old_bins);
         assert_eq!(det.rt_bins.len(), det.n_bins());
     }
-
 }

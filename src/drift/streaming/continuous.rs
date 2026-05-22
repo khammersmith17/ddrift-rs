@@ -337,7 +337,6 @@ impl<T: Float, M: StreamingDataDriftMark> NullableStreamingContinuousDataDrift<T
     pub fn n_bins(&self) -> usize {
         self.baseline.n_bins()
     }
-
 }
 
 /// Streaming drift detector for continuous (floating-point) features. Maintains a running
@@ -541,8 +540,7 @@ impl<T: Float + Send + Sync> StreamingContinuousDataDrift<T, DecayModeMark> {
         quantile_type: Option<QuantileType>,
         half_life_opt: Option<NonZeroU64>,
     ) -> Result<StreamingContinuousDataDrift<T, DecayModeMark>, DriftError> {
-        let baseline =
-            BaselineContinuousBins::new(baseline_data, quantile_type.unwrap_or_default())?;
+        let baseline = BaselineContinuousBins::new(baseline_data, quantile_type)?;
         let bl_hist_len = baseline.baseline_bins().len();
         let stream_bins: Vec<f64> = vec![0_f64; bl_hist_len];
         let half_life =
@@ -585,8 +583,7 @@ impl<T: Float + Send + Sync> StreamingContinuousDataDrift<T, FlushModeMark> {
         flush_size_opt: Option<u64>,
         flush_cadence_opt: Option<Duration>,
     ) -> Result<StreamingContinuousDataDrift<T, FlushModeMark>, DriftError> {
-        let baseline =
-            BaselineContinuousBins::new(baseline_data, quantile_type.unwrap_or_default())?;
+        let baseline = BaselineContinuousBins::new(baseline_data, quantile_type)?;
         let bl_hist_len = baseline.baseline_bins().len();
         let stream_bins: Vec<f64> = vec![0_f64; bl_hist_len];
         let flush_size = flush_size_opt.unwrap_or(constants::DEFAULT_MAX_STREAM_SIZE);
@@ -698,7 +695,6 @@ impl<T: Float, M: StreamingDataDriftMark> StreamingContinuousDataDrift<T, M> {
     pub fn n_bins(&self) -> usize {
         self.baseline.n_bins()
     }
-
 }
 
 #[allow(private_bounds)]

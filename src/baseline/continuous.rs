@@ -272,14 +272,13 @@ impl<T: Float + Send + Sync> BaselineContinuousBins<T> {
     // dataset.
     pub fn new(
         baseline_data: &[T],
-        quantile_resolution: QuantileType,
+        quantile_resolution: Option<QuantileType>,
     ) -> Result<BaselineContinuousBins<T>, DriftError> {
         let sample_size = baseline_data.len() as f64;
         let sorted_baseline = sort_baseline_data(baseline_data)?;
-        let bin_edges = ContinuousBinEdges::new_from_dataset_with_quantile_type(
-            &sorted_baseline,
-            quantile_resolution,
-        );
+        let q_type = quantile_resolution.unwrap_or_default();
+        let bin_edges =
+            ContinuousBinEdges::new_from_dataset_with_quantile_type(&sorted_baseline, q_type);
 
         let baseline_hist = compute_dataset_from_bins_continuous(baseline_data, &bin_edges);
 
@@ -287,7 +286,7 @@ impl<T: Float + Send + Sync> BaselineContinuousBins<T> {
             bin_edges,
             sample_size,
             baseline_hist,
-            quantile_type: quantile_resolution,
+            quantile_type: q_type,
         })
     }
 
