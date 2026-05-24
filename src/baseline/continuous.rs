@@ -136,7 +136,7 @@ impl<T: Float + serde::de::DeserializeOwned> TryFrom<NullableContinuousDriftBase
             sample_size,
         } = export;
         let n_bins = baseline_hist.len();
-        if raw_bin_edges.len() != n_bins - 2 || n_bins < MIN_BIN_CLAMP {
+        if raw_bin_edges.len() != n_bins - 1 || n_bins < MIN_BIN_CLAMP {
             return Err(DriftExportError::InvalidDataShape);
         }
         let bin_edges_inner = ContinuousBinEdges::new_from_parts(raw_bin_edges);
@@ -197,7 +197,7 @@ impl<T: Float + serde::de::DeserializeOwned> TryFrom<ContinuousDriftBaselineExpo
             sample_size,
         } = export;
         let n_bins = baseline_hist.len();
-        if raw_bin_edges.len() != n_bins - 2 || n_bins < MIN_BIN_CLAMP {
+        if raw_bin_edges.len() != n_bins - 1 || n_bins < MIN_BIN_CLAMP {
             return Err(DriftExportError::InvalidDataShape);
         }
 

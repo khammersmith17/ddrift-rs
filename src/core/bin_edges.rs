@@ -34,7 +34,7 @@ impl<T: Float> ContinuousBinEdges<T> {
          *  be assigned to one of the tail quantile bins.
          *  - Each bin has a constant step size.
          * */
-        let mut bin_edges = vec![T::zero(); n_bins - 2];
+        let mut bin_edges = vec![T::zero(); n_bins - 1];
         let n = dataset.len();
         let n_0 = dataset[0];
         let bin_step = (dataset[n - 1] - n_0) / T::from(n_bins).unwrap();
@@ -52,22 +52,6 @@ impl<T: Float> ContinuousBinEdges<T> {
         self.n_bins
     }
 
-    #[inline]
-    fn left_bin_edge(&self) -> T {
-        self.bin_edges[0]
-    }
-
-    #[inline]
-    fn right_bin_edge(&self) -> T {
-        // bin_edges.len == n_bins - 2
-        self.bin_edges[self.len() - 1]
-    }
-
-    #[inline]
-    fn len(&self) -> usize {
-        self.bin_edges.len()
-    }
-
     pub(crate) fn export_edges(&self) -> Vec<T> {
         self.bin_edges.clone()
     }
@@ -79,17 +63,7 @@ impl<T: Float> ContinuousBinEdges<T> {
 
     #[inline]
     pub fn resolve_bin(&self, sample: T) -> usize {
-        if sample < self.left_bin_edge() {
-            return 0_usize;
-        }
-
-        if sample > self.right_bin_edge() {
-            return self.n_bins - 1;
-        }
-        // find "pivot" point
-        // ie the bin where value >= left and < right
-        // this incorrectly misses the left and right edge currently
-        // as these values would not created a parition within the edges
+        // Values are assigned to bin with condition [i, i + 1).
         let i = self.bin_edges.partition_point(|edge| sample >= *edge);
         i.clamp(0, self.n_bins - 1)
     }
@@ -184,5 +158,70 @@ impl<T: Hash + Ord + Clone> NullableCategoricalBinEdges<T> {
 
     pub(crate) fn n_bins(&self) -> usize {
         self.0.len() + 1
+    }
+}
+
+#[cfg(test)]
+mod continuous_test {
+    use super::*;
+
+    fn define_bins() -> ContinuousBinEdges<f32> {
+        let bin_edges: Vec<f32> = vec![0.25, 0.50, 0.75];
+        let n_bins = 4_usize;
+
+        ContinuousBinEdges { bin_edges, n_bins }
+    }
+
+    fn define_nullable_bins() -> NullableContinuousBinEdges<f32> {
+        let inner = define_bins();
+
+        NullableContinuousBinEdges { inner }
+    }
+
+    #[test]
+    fn continuous_resolution_non_edge() {
+        let bins = define_bins();
+
+        assert_eq!(0_usize, bins.resolve_bin(0.1));
+        assert_eq!(1_usize, bins.resolve_bin(0.3));
+        assert_eq!(2_usize, bins.resolve_bin(0.55));
+        assert_eq!(3_usize, bins.resolve_bin(1.0));
+    }
+
+    #[test]
+    fn continuous_resolution_edge() {
+        let bins = define_bins();
+
+        assert_eq!(0_usize, bins.resolve_bin(0.1));
+        assert_eq!(1_usize, bins.resolve_bin(0.25));
+        assert_eq!(2_usize, bins.resolve_bin(0.50));
+        assert_eq!(3_usize, bins.resolve_bin(0.75));
+    }
+
+    #[test]
+    fn all_bins_resolved() {
+        use std::collections::HashSet;
+        let mut resolved_set: HashSet<usize> = HashSet::new();
+        let bins = define_bins();
+        let mut value = 0.1;
+        let step = 0.01;
+
+        while value < 1_f32 {
+            resolved_set.insert(bins.resolve_bin(value));
+            value += step;
+        }
+
+        assert_eq!(4_usize, resolved_set.len());
+    }
+
+    #[test]
+    fn continuous_nullable() {
+        let nullable_bins = define_nullable_bins();
+
+        assert_eq!(Some(0_usize), nullable_bins.resolve_bin(Some(0.1)));
+        assert_eq!(Some(1_usize), nullable_bins.resolve_bin(Some(0.3)));
+        assert_eq!(Some(2_usize), nullable_bins.resolve_bin(Some(0.55)));
+        assert_eq!(Some(3_usize), nullable_bins.resolve_bin(Some(1.0)));
+        assert_eq!(None, nullable_bins.resolve_bin(None));
     }
 }
