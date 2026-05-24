@@ -27,7 +27,7 @@ pub(crate) fn compute_dataset_from_bins_continuous<T: Float + Send + Sync>(
 pub(crate) fn compute_dataset_from_bins_continuous_null_parallel<T: Float + Send + Sync>(
     dataset: &[Option<T>],
     edges: &ContinuousBinEdges<T>,
-) -> (Vec<f64>, usize) {
+) -> (Vec<f64>, f64) {
     opt::continuous::parallel_approx_dataset_nullable(
         dataset,
         edges,
@@ -46,7 +46,10 @@ fn compute_dataset_from_bins_continuous_seq<T: Float>(
     hist
 }
 
-pub(crate) fn compute_dataset_from_bins_categorical_parallel<'a, T: Hash + Ord + Clone + Sync>(
+pub(crate) fn compute_dataset_from_bins_categorical_parallel<
+    'a,
+    T: Hash + Ord + Clone + Send + Sync,
+>(
     dataset: &'a [T],
     edges: &'a CategoricalBinEdges<T>,
 ) -> Vec<f64> {
@@ -72,6 +75,21 @@ pub(crate) fn compute_dataset_from_nullable_bins_categorical<'a, T: Hash + Ord +
         }
     });
     (hist, null_n)
+}
+
+pub(crate) fn compute_dataset_from_nullable_bins_categorical_parallel<
+    'a,
+    T: Hash + Ord + Clone + Send + Sync,
+>(
+    dataset: &'a [Option<T>],
+    edges: &'a NullableCategoricalBinEdges<T>,
+) -> (Vec<f64>, f64) {
+    let thread_count = get_thread_count(dataset.len());
+    if thread_count > 1 {
+        opt::categorical::parallel_approx_dataset_nullable(dataset, edges, thread_count)
+    } else {
+        compute_dataset_from_nullable_bins_categorical(dataset, edges)
+    }
 }
 
 pub(crate) fn compute_dataset_from_bins_categorical<'a, T: Hash + Ord + Clone>(
@@ -134,16 +152,21 @@ pub(crate) fn categorical_derive_baseline_state<T: Hash + Ord + Clone>(
         return Err(DriftError::EmptyBaselineData);
     }
 
-    let mut initial_bins: BTreeMap<T, f64> = BTreeMap::new();
-    for cat in baseline_dataset.iter() {
-        if let Some(count) = initial_bins.get_mut(cat) {
-            *count += 1_f64;
-        } else {
-            initial_bins.insert(cat.clone(), 1_f64);
-        }
-    }
+    // Count occurance of each value in the dataset.
+    // BTreeMap is used to have deterministic ordering of bins.
+    let initial_bins: BTreeMap<T, f64> =
+        baseline_dataset
+            .iter()
+            .fold(BTreeMap::new(), |mut bin_acc, example| {
+                if let Some(c) = bin_acc.get_mut(example) {
+                    *c += 1_f64;
+                } else {
+                    bin_acc.insert(example.clone(), 1_f64);
+                }
+                bin_acc
+            });
 
-    // Preallocate space for cardinatity of the dataset + 1
+    // Preallocate space for cardinatity of the dataset + 1.
     // The additional bin is reserved for data values not observed in the baseline dataset
     let mut baseline_bins = vec![0_f64; initial_bins.len() + 1_usize];
     let mut idx_map: HashMap<T, usize> = HashMap::with_capacity(initial_bins.len());

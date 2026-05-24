@@ -3,6 +3,7 @@ use crate::{
     core::{
         compute_dataset_from_bins_categorical, compute_dataset_from_bins_categorical_parallel,
         compute_dataset_from_nullable_bins_categorical,
+        compute_dataset_from_nullable_bins_categorical_parallel,
         drift_metrics::{
             CategoricalDriftType, DriftContainer, compute_drift_categorical,
             compute_drift_categorical_multi,
@@ -139,6 +140,50 @@ impl<T: Hash + Ord + Clone> NullableCategoricalDataDrift<T> {
     }
 }
 
+impl<T: Hash + Ord + Clone + Send + Sync> NullableCategoricalDataDrift<T> {
+    pub fn compute_drift_par(
+        &mut self,
+        runtime_data: &[Option<T>],
+        drift_type: CategoricalDriftType,
+    ) -> Result<NullableDriftComputation<CategoricalDriftType>, DriftError> {
+        self.build_rt_hist_par(runtime_data)?;
+        let null_percentage = self.null_n / self.n;
+        let drift = compute_drift_categorical(self, drift_type);
+        self.clear_rt();
+        Ok(NullableDriftComputation {
+            drift,
+            null_percentage,
+        })
+    }
+
+    pub fn compute_drift_multiple_criteria_par(
+        &mut self,
+        runtime_data: &[Option<T>],
+        drift_types: &[CategoricalDriftType],
+    ) -> Result<NullableDriftComputationMulti<CategoricalDriftType>, DriftError> {
+        self.build_rt_hist_par(runtime_data)?;
+        let null_percentage = self.null_n / self.n;
+        let drift = compute_drift_categorical_multi(self, drift_types);
+        self.clear_rt();
+        Ok(NullableDriftComputationMulti {
+            drift,
+            null_percentage,
+        })
+    }
+
+    fn build_rt_hist_par(&mut self, runtime_data: &[Option<T>]) -> Result<(), DriftError> {
+        if runtime_data.is_empty() {
+            return Err(DriftError::EmptyRuntimeData);
+        }
+        self.n = runtime_data.len() as f64;
+        (self.rt_bins, self.null_n) = compute_dataset_from_nullable_bins_categorical_parallel(
+            runtime_data,
+            self.baseline.bin_edges(),
+        );
+        Ok(())
+    }
+}
+
 #[derive(Debug)]
 pub struct CategoricalDataDrift<T: Hash + Ord + Clone> {
     pub(crate) baseline: BaselineCategoricalBins<T>,
@@ -189,7 +234,7 @@ impl<T: Hash + Ord + Clone + serde::de::DeserializeOwned> CategoricalDataDrift<T
     }
 }
 
-impl<T: Hash + Ord + Clone + Sync> CategoricalDataDrift<T> {
+impl<T: Hash + Ord + Clone + Send + Sync> CategoricalDataDrift<T> {
     /// Construct a new instance from a baseline dataset. The baseline is used to build a
     /// label-frequency histogram with one bin per unique value, plus one reserved "other" bin
     /// for values not present in the baseline. This method requires a T that is Sync, thus
@@ -490,5 +535,4 @@ mod categorical_test {
         det.reset_baseline(&["a", "b", "c", "d"]).unwrap();
         assert_eq!(det.rt_bins.len(), 5); // 4 labels + other
     }
-
 }

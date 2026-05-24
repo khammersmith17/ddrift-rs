@@ -109,6 +109,7 @@ impl<T: Float> NullableContinuousBinEdges<T> {
         &self.inner
     }
 
+    #[inline]
     pub fn resolve_bin(&self, sample: Option<T>) -> Option<usize> {
         if let Some(concrete_sample) = sample {
             Some(self.inner.resolve_bin(concrete_sample))
@@ -143,18 +144,16 @@ impl<T: Hash + Ord + Clone> CategoricalBinEdges<T> {
         &self.0
     }
 
+    #[inline]
     pub fn resolve_bin<Q>(&self, key: &Q) -> usize
     where
         T: std::borrow::Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        if let Some(idx) = self.0.get(key) {
-            *idx
-        } else {
-            self.n_bins() - 1
-        }
+        *self.0.get(key).unwrap_or(&(self.n_bins() - 1))
     }
 
+    #[inline]
     pub(crate) fn n_bins(&self) -> usize {
         self.0.len() + 1
     }
@@ -173,17 +172,14 @@ impl<T: Hash + Ord + Clone> NullableCategoricalBinEdges<T> {
         &self.0
     }
 
+    #[inline]
     pub fn resolve_bin<Q>(&self, key_opt: &Option<Q>) -> Option<usize>
     where
         T: std::borrow::Borrow<Q>,
         Q: Hash + Eq,
     {
         let Some(example) = key_opt else { return None };
-        if let Some(idx) = self.0.get(example) {
-            Some(*idx)
-        } else {
-            Some(self.n_bins() - 1)
-        }
+        Some(*self.0.get(example).unwrap_or(&(self.n_bins() - 1)))
     }
 
     pub(crate) fn n_bins(&self) -> usize {

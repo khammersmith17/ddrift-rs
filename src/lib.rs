@@ -11,8 +11,11 @@ use core::{
     error::DriftError,
 };
 use drift::{
-    DriftComputation,
-    discrete::{categorical::CategoricalDataDrift, continuous::ContinuousDataDrift},
+    DriftComputation, NullableDriftComputationMulti,
+    discrete::{
+        categorical::{CategoricalDataDrift, NullableCategoricalDataDrift},
+        continuous::ContinuousDataDrift,
+    },
 };
 use num_traits::Float;
 use std::hash::Hash;
@@ -64,12 +67,23 @@ pub fn compute_drift_categorical_distribution<T: Hash + Ord + Clone>(
 /// Performs the same computation as [`compute_drift_categorical_distribution`], but if the type is
 /// Sync, it can be optimized to perform the bin assignment across many cores. The is method
 /// provides that functionaliy.
-pub fn compute_drift_categorical_distribution_par<T: Hash + Ord + Clone + Sync>(
+pub fn compute_drift_categorical_distribution_par<T: Hash + Ord + Clone + Send + Sync>(
     baseline_distribution: &[T],
     candidate_distribution: &[T],
     drift_metrics: &[CategoricalDriftType],
 ) -> Result<Vec<DriftComputation<CategoricalDriftType>>, DriftError> {
     let mut drift_container = CategoricalDataDrift::new(baseline_distribution)?;
+    let drift_res = drift_container
+        .compute_drift_multiple_criteria_par(candidate_distribution, drift_metrics)?;
+    Ok(drift_res)
+}
+
+pub fn compute_drift_nullable_categorical_distribution_par<T: Hash + Ord + Clone + Send + Sync>(
+    baseline_distribution: &[Option<T>],
+    candidate_distribution: &[Option<T>],
+    drift_metrics: &[CategoricalDriftType],
+) -> Result<NullableDriftComputationMulti<CategoricalDriftType>, DriftError> {
+    let mut drift_container = NullableCategoricalDataDrift::new(baseline_distribution)?;
     let drift_res = drift_container
         .compute_drift_multiple_criteria_par(candidate_distribution, drift_metrics)?;
     Ok(drift_res)
