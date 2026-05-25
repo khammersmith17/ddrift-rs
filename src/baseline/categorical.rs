@@ -1,6 +1,6 @@
 use crate::{
     core::{
-        bin_edges::{CategoricalBinEdges, NullableCategoricalBinEdges},
+        bin_edges::CategoricalBinEdges,
         categorical_derive_baseline_state,
         error::{DriftError, DriftExportError},
         nullable_categorical_derive_baseline_state,
@@ -172,7 +172,7 @@ impl<T: Hash + Ord + Clone + serde::Serialize> TryFrom<NullableBaselineCategoric
 
 #[derive(Clone, Debug)]
 pub struct NullableBaselineCategoricalBins<T: Hash + Ord + Clone> {
-    pub bin_edges: NullableCategoricalBinEdges<T>,
+    pub bin_edges: CategoricalBinEdges<T>,
     pub(crate) baseline_bins: Vec<f64>,
     pub(crate) total_samples: f64,
     pub(crate) null_samples: f64,
@@ -185,7 +185,7 @@ impl<T: Hash + Ord + Clone> NullableBaselineCategoricalBins<T> {
         let (idx_map, baseline_bins, null_count) =
             nullable_categorical_derive_baseline_state(baseline_data)?;
 
-        let bin_edges = NullableCategoricalBinEdges::new(idx_map);
+        let bin_edges = CategoricalBinEdges::new(idx_map);
 
         Ok(NullableBaselineCategoricalBins {
             bin_edges,
@@ -203,18 +203,18 @@ impl<T: Hash + Ord + Clone> NullableBaselineCategoricalBins<T> {
         &self.baseline_bins
     }
 
-    pub(crate) fn bin_edges(&self) -> &NullableCategoricalBinEdges<T> {
+    pub(crate) fn bin_edges(&self) -> &CategoricalBinEdges<T> {
         &self.bin_edges
     }
 
     /// Resolve the bin idx for a particular key, otherwise return out the bin reserved for the
     /// "other" bucket.
-    pub(crate) fn resolve_bin<Q>(&self, key_opt: &Option<Q>) -> Option<usize>
+    pub(crate) fn resolve_bin<Q>(&self, key: &Q) -> usize
     where
         T: Borrow<Q>,
-        Q: Hash + Eq,
+        Q: Hash + Eq + ?Sized,
     {
-        self.bin_edges.resolve_bin(key_opt)
+        self.bin_edges.resolve_bin(key)
     }
 
     pub(crate) fn n_bins(&self) -> usize {
@@ -255,7 +255,7 @@ impl<T: Hash + Ord + Clone + serde::de::DeserializeOwned>
             .map(|(i, label)| (label, i))
             .collect();
 
-        let bin_edges = NullableCategoricalBinEdges::new(idx_map);
+        let bin_edges = CategoricalBinEdges::new(idx_map);
 
         Ok(NullableBaselineCategoricalBins {
             baseline_bins: baseline_hist,

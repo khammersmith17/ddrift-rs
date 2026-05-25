@@ -3,7 +3,7 @@ pub mod dataset_view;
 pub mod distribution;
 pub mod drift_metrics;
 pub mod error;
-use bin_edges::{CategoricalBinEdges, ContinuousBinEdges, NullableCategoricalBinEdges};
+use bin_edges::{CategoricalBinEdges, ContinuousBinEdges};
 mod opt;
 use crate::constants::get_thread_count;
 use ahash::{HashMap, HashMapExt};
@@ -63,13 +63,13 @@ pub(crate) fn compute_dataset_from_bins_categorical_parallel<
 
 pub(crate) fn compute_dataset_from_nullable_bins_categorical<'a, T: Hash + Ord + Clone>(
     dataset: &'a [Option<T>],
-    edges: &'a NullableCategoricalBinEdges<T>,
+    edges: &'a CategoricalBinEdges<T>,
 ) -> (Vec<f64>, f64) {
     let mut hist = vec![0_f64; edges.n_bins()];
     let mut null_n = 0_f64;
-    dataset.iter().for_each(|e| {
-        if let Some(idx) = edges.resolve_bin(e) {
-            hist[idx] += 1_f64
+    dataset.iter().for_each(|e_opt| {
+        if let Some(e) = e_opt {
+            hist[edges.resolve_bin(e)] += 1_f64
         } else {
             null_n += 1_f64
         }
@@ -82,7 +82,7 @@ pub(crate) fn compute_dataset_from_nullable_bins_categorical_parallel<
     T: Hash + Ord + Clone + Send + Sync,
 >(
     dataset: &'a [Option<T>],
-    edges: &'a NullableCategoricalBinEdges<T>,
+    edges: &'a CategoricalBinEdges<T>,
 ) -> (Vec<f64>, f64) {
     let thread_count = get_thread_count(dataset.len());
     if thread_count > 1 {

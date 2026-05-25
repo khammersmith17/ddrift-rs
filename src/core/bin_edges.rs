@@ -69,42 +69,6 @@ impl<T: Float> ContinuousBinEdges<T> {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
-pub struct NullableContinuousBinEdges<T: Float> {
-    pub(crate) inner: ContinuousBinEdges<T>,
-}
-
-impl<T: Float> NullableContinuousBinEdges<T> {
-    pub(crate) fn new(inner: ContinuousBinEdges<T>) -> NullableContinuousBinEdges<T> {
-        Self { inner }
-    }
-
-    pub(crate) fn inner_ref(&self) -> &ContinuousBinEdges<T> {
-        &self.inner
-    }
-
-    #[inline]
-    pub fn resolve_bin(&self, sample: Option<T>) -> Option<usize> {
-        if let Some(concrete_sample) = sample {
-            Some(self.inner.resolve_bin(concrete_sample))
-        } else {
-            None
-        }
-    }
-
-    pub(crate) fn n_bins(&self) -> usize {
-        self.inner.n_bins
-    }
-
-    pub(crate) fn export_edges(&self) -> Vec<T> {
-        self.inner.bin_edges.clone()
-    }
-
-    pub(crate) fn take_edges(self) -> Vec<T> {
-        self.inner.take_edges()
-    }
-}
-
 /// Utility wrapper type to encapsulate bin resolution when approximating an entire dataset.
 #[derive(Clone, Debug)]
 pub struct CategoricalBinEdges<T: Hash + Ord + Clone>(pub ahash::HashMap<T, usize>);
@@ -133,34 +97,6 @@ impl<T: Hash + Ord + Clone> CategoricalBinEdges<T> {
     }
 }
 
-/// Utility wrapper type to encapsulate bin resolution when approximating an entire dataset.
-#[derive(Clone, Debug)]
-pub struct NullableCategoricalBinEdges<T: Hash + Ord + Clone>(pub ahash::HashMap<T, usize>);
-
-impl<T: Hash + Ord + Clone> NullableCategoricalBinEdges<T> {
-    pub fn new(idx_map: ahash::HashMap<T, usize>) -> NullableCategoricalBinEdges<T> {
-        Self(idx_map)
-    }
-
-    pub fn inner_ref(&self) -> &ahash::HashMap<T, usize> {
-        &self.0
-    }
-
-    #[inline]
-    pub fn resolve_bin<Q>(&self, key_opt: &Option<Q>) -> Option<usize>
-    where
-        T: std::borrow::Borrow<Q>,
-        Q: Hash + Eq,
-    {
-        let Some(example) = key_opt else { return None };
-        Some(*self.0.get(example).unwrap_or(&(self.n_bins() - 1)))
-    }
-
-    pub(crate) fn n_bins(&self) -> usize {
-        self.0.len() + 1
-    }
-}
-
 #[cfg(test)]
 mod continuous_test {
     use super::*;
@@ -170,12 +106,6 @@ mod continuous_test {
         let n_bins = 4_usize;
 
         ContinuousBinEdges { bin_edges, n_bins }
-    }
-
-    fn define_nullable_bins() -> NullableContinuousBinEdges<f32> {
-        let inner = define_bins();
-
-        NullableContinuousBinEdges { inner }
     }
 
     #[test]
@@ -213,15 +143,42 @@ mod continuous_test {
 
         assert_eq!(4_usize, resolved_set.len());
     }
+}
+
+#[cfg(test)]
+mod categorical_test {
+    use super::*;
+    use ahash::HashMap;
+
+    const OTHER_BUCKET: usize = 4;
+
+    fn define_map() -> HashMap<String, usize> {
+        let mut keys = vec!["Four".into(), "One".into(), "Three".into(), "Two".into()];
+        keys.sort();
+        let map: HashMap<String, usize> =
+            keys.into_iter().enumerate().map(|(i, k)| (k, i)).collect();
+        // Four, One, Three, Two
+        map
+    }
+
+    fn define_bins() -> CategoricalBinEdges<String> {
+        CategoricalBinEdges::new(define_map())
+    }
 
     #[test]
-    fn continuous_nullable() {
-        let nullable_bins = define_nullable_bins();
+    fn other_bucket() {
+        let bins = define_bins();
 
-        assert_eq!(Some(0_usize), nullable_bins.resolve_bin(Some(0.1)));
-        assert_eq!(Some(1_usize), nullable_bins.resolve_bin(Some(0.3)));
-        assert_eq!(Some(2_usize), nullable_bins.resolve_bin(Some(0.55)));
-        assert_eq!(Some(3_usize), nullable_bins.resolve_bin(Some(1.0)));
-        assert_eq!(None, nullable_bins.resolve_bin(None));
+        assert_eq!(OTHER_BUCKET, bins.resolve_bin("random"));
+    }
+
+    #[test]
+    fn categorical_resolve() {
+        let bins = define_bins();
+
+        assert_eq!(0_usize, bins.resolve_bin("Four"));
+        assert_eq!(1_usize, bins.resolve_bin("One"));
+        assert_eq!(2_usize, bins.resolve_bin("Three"));
+        assert_eq!(3_usize, bins.resolve_bin("Two"));
     }
 }

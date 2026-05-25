@@ -1,4 +1,4 @@
-use super::{CategoricalBinEdges, ContinuousBinEdges, NullableCategoricalBinEdges};
+use super::{CategoricalBinEdges, ContinuousBinEdges};
 use crate::constants::get_thread_count;
 
 /*
@@ -121,7 +121,7 @@ pub(crate) mod categorical {
 
     pub(crate) fn parallel_approx_dataset_nullable<T: Hash + Ord + Clone + Send + Sync>(
         dataset: &[Option<T>],
-        bin_edges: &super::NullableCategoricalBinEdges<T>,
+        bin_edges: &super::CategoricalBinEdges<T>,
         thread_count: usize,
     ) -> (Vec<f64>, f64) {
         let n = dataset.len();
@@ -136,8 +136,8 @@ pub(crate) mod categorical {
                         let mut count_none = 0_f64;
                         let mut local_hist = vec![0_f64; n_bins];
                         for example in dataset_chunk.iter() {
-                            match bin_edges.resolve_bin(example) {
-                                Some(bin) => local_hist[bin] += 1_f64,
+                            match example {
+                                Some(e) => local_hist[bin_edges.resolve_bin(e)] += 1_f64,
                                 None => count_none += 1_f64,
                             }
                         }

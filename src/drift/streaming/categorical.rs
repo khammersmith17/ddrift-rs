@@ -323,9 +323,9 @@ impl<T: Hash + Ord + Clone, M: StreamingDataDriftMark> NullableStreamingCategori
 
     /// Push a single label into the stream.
     #[inline]
-    pub fn update_stream(&mut self, item: &Option<T>) {
-        if let Some(idx) = self.baseline.resolve_bin(item) {
-            self.stream_bins[idx] += 1_f64;
+    pub fn update_stream(&mut self, item_opt: &Option<T>) {
+        if let Some(item) = item_opt {
+            self.stream_bins[self.baseline.resolve_bin(item)] += 1_f64;
         } else {
             self.null_count += 1_f64;
         }

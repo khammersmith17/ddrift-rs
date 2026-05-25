@@ -1,6 +1,6 @@
 use crate::{
     core::{
-        bin_edges::{ContinuousBinEdges, NullableContinuousBinEdges},
+        bin_edges::ContinuousBinEdges,
         compute_dataset_from_bins_continuous,
         distribution::{MIN_BIN_CLAMP, QuantileType},
         error::{DriftError, DriftExportError},
@@ -53,7 +53,7 @@ fn sort_baseline_data<T: Float>(data: &[T]) -> Result<Vec<T>, DriftError> {
 
 #[derive(Clone, Debug)]
 pub struct NullableBaselineContinuousBins<T: Float> {
-    pub(crate) bin_edges: NullableContinuousBinEdges<T>,
+    pub(crate) bin_edges: ContinuousBinEdges<T>,
     pub(crate) baseline_hist: Vec<f64>,
     pub(crate) quantile_type: QuantileType,
     pub(crate) sample_size: f64,
@@ -62,7 +62,7 @@ pub struct NullableBaselineContinuousBins<T: Float> {
 
 impl<T: Float> NullableBaselineContinuousBins<T> {
     pub(crate) fn bin_edges(&self) -> &ContinuousBinEdges<T> {
-        self.bin_edges.inner_ref()
+        &self.bin_edges
     }
 
     pub(crate) fn baseline_bins(&self) -> &[f64] {
@@ -79,8 +79,9 @@ impl<T: Float> NullableBaselineContinuousBins<T> {
 
     // Resolve the bin a particular data example falls into.
     #[inline]
-    pub(crate) fn resolve_bin(&self, sample: Option<T>) -> Option<usize> {
-        self.bin_edges.resolve_bin(sample)
+    pub(crate) fn resolve_bin(&self, sample_opt: Option<T>) -> Option<usize> {
+        let sample = sample_opt?;
+        Some(self.bin_edges.resolve_bin(sample))
     }
 
     /// Non-none population size.
@@ -97,15 +98,13 @@ impl<T: Float + Send + Sync> NullableBaselineContinuousBins<T> {
         let sample_size = baseline_data.len() as f64;
         let quantile_type = quantile_type_opt.unwrap_or_default();
         let (sorted_baseline, null_count) = sort_baseline_data_opt(baseline_data)?;
-        let bin_edges_inner: ContinuousBinEdges<T> =
+        let bin_edges: ContinuousBinEdges<T> =
             ContinuousBinEdges::new_from_dataset_with_quantile_type(
                 &sorted_baseline,
                 quantile_type,
             );
 
-        let baseline_hist =
-            compute_dataset_from_bins_continuous(&sorted_baseline, &bin_edges_inner);
-        let bin_edges = NullableContinuousBinEdges::new(bin_edges_inner);
+        let baseline_hist = compute_dataset_from_bins_continuous(&sorted_baseline, &bin_edges);
 
         Ok(NullableBaselineContinuousBins {
             bin_edges,
@@ -139,8 +138,7 @@ impl<T: Float + serde::de::DeserializeOwned> TryFrom<NullableContinuousDriftBase
         if raw_bin_edges.len() != n_bins - 1 || n_bins < MIN_BIN_CLAMP {
             return Err(DriftExportError::InvalidDataShape);
         }
-        let bin_edges_inner = ContinuousBinEdges::new_from_parts(raw_bin_edges);
-        let bin_edges = NullableContinuousBinEdges::new(bin_edges_inner);
+        let bin_edges = ContinuousBinEdges::new_from_parts(raw_bin_edges);
 
         Ok(NullableBaselineContinuousBins {
             bin_edges,

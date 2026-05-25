@@ -2,11 +2,7 @@ use crate::baseline::{
     BaselineCategoricalBins, BaselineContinuousBins, NullableBaselineCategoricalBins,
     NullableBaselineContinuousBins,
 };
-use crate::core::{
-    bin_edges::{CategoricalBinEdges, NullableCategoricalBinEdges},
-    distribution::QuantileType,
-    error::DriftError,
-};
+use crate::core::{bin_edges::CategoricalBinEdges, distribution::QuantileType, error::DriftError};
 use ahash::HashMap;
 use num_traits::Float;
 use std::hash::Hash;
@@ -60,7 +56,7 @@ impl<T: Ord + Clone + Hash> From<NullableBaselineCategoricalBins<T>>
             null_samples,
             baseline_bins,
         } = baseline;
-        let NullableCategoricalBinEdges(mut idx_map) = bin_edges;
+        let CategoricalBinEdges(mut idx_map) = bin_edges;
         // For each key, the index in idx_map can be used to resolve the offset in the bin vector
         // of where the value count is stored.
         for (_key, idx) in idx_map.iter_mut() {
@@ -132,7 +128,7 @@ impl<T: Float> From<NullableBaselineContinuousBins<T>> for NullableContinuousDat
         } = baseline;
         NullableContinuousDatasetView {
             quantile_bins,
-            bin_edges: bin_edges_c.inner.bin_edges,
+            bin_edges: bin_edges_c.bin_edges,
             size: sample_size as usize,
             null_count: null_count as usize,
         }
