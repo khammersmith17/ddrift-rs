@@ -7,11 +7,11 @@ pub mod export;
 use core::{
     bin_edges::ContinuousBinEdges,
     distribution::QuantileType,
-    drift_metrics::{CategoricalDriftType, ContinuousDriftType},
+    drift_metrics::{CategoricalDriftMeasurement, ContinuousDriftMeasurement},
     error::DriftError,
 };
 use drift::{
-    DriftComputation, NullableDriftComputationMulti,
+    DriftComputation, DriftComputationMulti, NullableDriftComputationMulti,
     discrete::{
         categorical::{CategoricalDataDrift, NullableCategoricalDataDrift},
         continuous::ContinuousDataDrift,
@@ -43,9 +43,9 @@ pub fn compute_approximate_dataset_continuous_with_bin_edges<T: Float + Send + S
 pub fn compute_drift_continuous_distribution<T: Float + Send + Sync>(
     baseline_distribution: &[T],
     candidate_distribution: &[T],
-    drift_metrics: &[ContinuousDriftType],
+    drift_metrics: &[ContinuousDriftMeasurement],
     quantile_type: Option<QuantileType>,
-) -> Result<Vec<DriftComputation<ContinuousDriftType>>, DriftError> {
+) -> Result<DriftComputationMulti<ContinuousDriftMeasurement>, DriftError> {
     let mut drift_container =
         ContinuousDataDrift::new_from_baseline(quantile_type, baseline_distribution)?;
     let drift_res =
@@ -56,8 +56,8 @@ pub fn compute_drift_continuous_distribution<T: Float + Send + Sync>(
 pub fn compute_drift_categorical_distribution<T: Hash + Ord + Clone>(
     baseline_distribution: &[T],
     candidate_distribution: &[T],
-    drift_metrics: &[CategoricalDriftType],
-) -> Result<Vec<DriftComputation<CategoricalDriftType>>, DriftError> {
+    drift_metrics: &[CategoricalDriftMeasurement],
+) -> Result<DriftComputationMulti<CategoricalDriftMeasurement>, DriftError> {
     let mut drift_container = CategoricalDataDrift::new(baseline_distribution)?;
     let drift_res =
         drift_container.compute_drift_multiple_criteria(candidate_distribution, drift_metrics)?;
@@ -70,8 +70,8 @@ pub fn compute_drift_categorical_distribution<T: Hash + Ord + Clone>(
 pub fn compute_drift_categorical_distribution_par<T: Hash + Ord + Clone + Send + Sync>(
     baseline_distribution: &[T],
     candidate_distribution: &[T],
-    drift_metrics: &[CategoricalDriftType],
-) -> Result<Vec<DriftComputation<CategoricalDriftType>>, DriftError> {
+    drift_metrics: &[CategoricalDriftMeasurement],
+) -> Result<DriftComputationMulti<CategoricalDriftMeasurement>, DriftError> {
     let mut drift_container = CategoricalDataDrift::new(baseline_distribution)?;
     let drift_res = drift_container
         .compute_drift_multiple_criteria_par(candidate_distribution, drift_metrics)?;
@@ -81,8 +81,8 @@ pub fn compute_drift_categorical_distribution_par<T: Hash + Ord + Clone + Send +
 pub fn compute_drift_nullable_categorical_distribution_par<T: Hash + Ord + Clone + Send + Sync>(
     baseline_distribution: &[Option<T>],
     candidate_distribution: &[Option<T>],
-    drift_metrics: &[CategoricalDriftType],
-) -> Result<NullableDriftComputationMulti<CategoricalDriftType>, DriftError> {
+    drift_metrics: &[CategoricalDriftMeasurement],
+) -> Result<NullableDriftComputationMulti<CategoricalDriftMeasurement>, DriftError> {
     let mut drift_container = NullableCategoricalDataDrift::new(baseline_distribution)?;
     let drift_res = drift_container
         .compute_drift_multiple_criteria_par(candidate_distribution, drift_metrics)?;
@@ -99,7 +99,7 @@ mod tests {
     fn continuous_no_drift_returns_near_zero() {
         let baseline = [1.0, 2.0, 3.0, 4.0, 5.0];
         let candidate = [1.0, 2.0, 3.0, 4.0, 5.0];
-        let metrics = [ContinuousDriftType::PopulationStabilityIndex];
+        let metrics = [ContinuousDriftMeasurement::PopulationStabilityIndex];
 
         let result =
             compute_drift_continuous_distribution(&baseline, &candidate, &metrics, None).unwrap();
@@ -112,7 +112,7 @@ mod tests {
     fn continuous_shifted_distribution_detects_drift() {
         let baseline = [1.0, 2.0, 3.0, 4.0, 5.0];
         let candidate = [20.0, 21.0, 22.0, 23.0, 24.0];
-        let metrics = [ContinuousDriftType::PopulationStabilityIndex];
+        let metrics = [ContinuousDriftMeasurement::PopulationStabilityIndex];
 
         let result =
             compute_drift_continuous_distribution(&baseline, &candidate, &metrics, None).unwrap();
@@ -126,10 +126,10 @@ mod tests {
         let baseline = [1.0, 2.0, 3.0, 4.0, 5.0];
         let candidate = [1.0, 2.0, 3.0, 4.0, 5.0];
         let metrics = [
-            ContinuousDriftType::PopulationStabilityIndex,
-            ContinuousDriftType::JensenShannon,
-            ContinuousDriftType::KullbackLeibler,
-            ContinuousDriftType::WassersteinDistance,
+            ContinuousDriftMeasurement::PopulationStabilityIndex,
+            ContinuousDriftMeasurement::JensenShannon,
+            ContinuousDriftMeasurement::KullbackLeibler,
+            ContinuousDriftMeasurement::WassersteinDistance,
         ];
 
         let result =
@@ -145,7 +145,7 @@ mod tests {
     fn continuous_explicit_quantile_type_is_accepted() {
         let baseline = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
         let candidate = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-        let metrics = [ContinuousDriftType::JensenShannon];
+        let metrics = [ContinuousDriftMeasurement::JensenShannon];
 
         let result = compute_drift_continuous_distribution(
             &baseline,
@@ -163,7 +163,7 @@ mod tests {
     fn continuous_empty_baseline_returns_error() {
         let baseline: &[f64] = &[];
         let candidate = [1.0, 2.0];
-        let metrics = [ContinuousDriftType::PopulationStabilityIndex];
+        let metrics = [ContinuousDriftMeasurement::PopulationStabilityIndex];
 
         let result = compute_drift_continuous_distribution(baseline, &candidate, &metrics, None);
 
@@ -176,7 +176,7 @@ mod tests {
     fn categorical_no_drift_returns_near_zero() {
         let baseline = ["a", "b", "a", "c", "b", "a"];
         let candidate = ["a", "b", "a", "c", "b", "a"];
-        let metrics = [CategoricalDriftType::PopulationStabilityIndex];
+        let metrics = [CategoricalDriftMeasurement::PopulationStabilityIndex];
 
         let result =
             compute_drift_categorical_distribution(&baseline, &candidate, &metrics).unwrap();
@@ -189,7 +189,7 @@ mod tests {
     fn categorical_shifted_distribution_detects_drift() {
         let baseline = ["a", "a", "a", "a", "b"];
         let candidate = ["b", "b", "b", "b", "a"];
-        let metrics = [CategoricalDriftType::PopulationStabilityIndex];
+        let metrics = [CategoricalDriftMeasurement::PopulationStabilityIndex];
 
         let result =
             compute_drift_categorical_distribution(&baseline, &candidate, &metrics).unwrap();
@@ -203,10 +203,10 @@ mod tests {
         let baseline = ["x", "y", "x", "z", "y"];
         let candidate = ["x", "y", "x", "z", "y"];
         let metrics = [
-            CategoricalDriftType::PopulationStabilityIndex,
-            CategoricalDriftType::JensenShannon,
-            CategoricalDriftType::KullbackLeibler,
-            CategoricalDriftType::WassersteinDistance,
+            CategoricalDriftMeasurement::PopulationStabilityIndex,
+            CategoricalDriftMeasurement::JensenShannon,
+            CategoricalDriftMeasurement::KullbackLeibler,
+            CategoricalDriftMeasurement::WassersteinDistance,
         ];
 
         let result =
@@ -222,7 +222,7 @@ mod tests {
     fn categorical_unseen_label_in_candidate_is_handled() {
         let baseline = ["a", "b", "a", "b"];
         let candidate = ["a", "b", "c", "d"];
-        let metrics = [CategoricalDriftType::JensenShannon];
+        let metrics = [CategoricalDriftMeasurement::JensenShannon];
 
         // unseen labels should be bucketed into the overflow bin, not panic
         let result =
@@ -236,7 +236,7 @@ mod tests {
     fn categorical_integer_labels_are_supported() {
         let baseline = [1i32, 2, 1, 3, 2, 1];
         let candidate = [1i32, 2, 1, 3, 2, 1];
-        let metrics = [CategoricalDriftType::PopulationStabilityIndex];
+        let metrics = [CategoricalDriftMeasurement::PopulationStabilityIndex];
 
         let result =
             compute_drift_categorical_distribution(&baseline, &candidate, &metrics).unwrap();
@@ -251,7 +251,7 @@ mod tests {
     fn categorical_empty_baseline_returns_error() {
         let baseline: &[&str] = &[];
         let candidate = ["a", "b"];
-        let metrics = [CategoricalDriftType::PopulationStabilityIndex];
+        let metrics = [CategoricalDriftMeasurement::PopulationStabilityIndex];
 
         let result = compute_drift_categorical_distribution(baseline, &candidate, &metrics);
 

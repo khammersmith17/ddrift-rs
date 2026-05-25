@@ -2,6 +2,21 @@ use crate::constants;
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 
+#[inline]
+fn flush_condition(
+    total_stream_size: f64,
+    size: f64,
+    last_flush_ts: Instant,
+    cadence: Duration,
+) -> bool {
+    // Always flush on size.
+    // If not size, amortize the time check every 255 items.
+    // Will only check size when least signifcant byte is full.
+    total_stream_size >= size
+        || (total_stream_size as usize & constants::FLUSH_CHECK_OFFSET == 0
+            && Instant::now().duration_since(last_flush_ts) >= cadence)
+}
+
 #[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
 pub enum StreamingDriftMode {
@@ -57,6 +72,8 @@ impl From<StreamingDriftMode> for StreamModeInner {
     }
 }
 
+// Both modes will always have these methods called for simpler and more maintainable code here,
+// but in the case the method is not relevant for the mode, it decays to a no-op.
 impl StreamModeInner {
     #[inline]
     pub(crate) fn touch_flush_ts(&mut self) {
@@ -89,14 +106,7 @@ impl StreamModeInner {
                 size,
                 cadence,
                 last_flush_ts,
-            } => {
-                // Always flush on size.
-                // If not size, amortize the time check every 255 items.
-                // Will only check size when least signifcant byte is full.
-                total_stream_size >= *size
-                    || (total_stream_size as usize & constants::FLUSH_CHECK_OFFSET == 0
-                        && Instant::now().duration_since(*last_flush_ts) >= *cadence)
-            }
+            } => flush_condition(total_stream_size, *size, *last_flush_ts, *cadence),
             StreamModeInner::ExponentialDecay(_) => false,
         }
     }

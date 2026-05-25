@@ -1,32 +1,52 @@
-use crate::core::drift_metrics::ContinuousDriftType;
+use super::{DriftCheck, DriftMeasurementEvaluation, DriftThresholdEvaluation, NullableDriftCheck};
+use crate::constants::drift_thresholds as defaults;
+use crate::core::drift_metrics::ContinuousDriftMeasurement;
 use crate::drift::DriftComputation;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ContinuousDriftContract {
-    pub jensen_shannon: Option<f64>,
-    pub population_stability_index: Option<f64>,
-    pub wasserstein_distance: Option<f64>,
-    pub kullback_leibler: Option<f64>,
-    pub kolmogorov_smirnov: Option<f64>,
-    pub hellinger: Option<f64>,
+    pub jensen_shannon: f64,
+    pub population_stability_index: f64,
+    pub wasserstein_distance: f64,
+    pub kullback_leibler: f64,
+    pub kolmogorov_smirnov: f64,
+    pub hellinger: f64,
 }
 
 impl ContinuousDriftContract {
     /// Returns `true` if every result whose metric has a configured threshold is at or below that
     /// threshold. Results for metrics with no threshold always pass.
-    pub fn check(&self, results: &[DriftComputation<ContinuousDriftType>]) -> bool {
-        results.iter().all(|r| {
-            let threshold = match r.drift_type {
-                ContinuousDriftType::JensenShannon => self.jensen_shannon,
-                ContinuousDriftType::PopulationStabilityIndex => self.population_stability_index,
-                ContinuousDriftType::WassersteinDistance => self.wasserstein_distance,
-                ContinuousDriftType::KullbackLeibler => self.kullback_leibler,
-                ContinuousDriftType::KolmogorovSmirnov => self.kolmogorov_smirnov,
-                ContinuousDriftType::Hellinger => self.hellinger,
-            };
-            threshold.map_or(true, |t| r.drift_magnitude <= t)
-        })
+    pub fn check(
+        &self,
+        results: &[DriftComputation<ContinuousDriftMeasurement>],
+    ) -> DriftCheck<ContinuousDriftMeasurement> {
+        let eval = results
+            .iter()
+            .map(|r| {
+                let threshold = match r.drift_type {
+                    ContinuousDriftMeasurement::JensenShannon => self.jensen_shannon,
+                    ContinuousDriftMeasurement::PopulationStabilityIndex => {
+                        self.population_stability_index
+                    }
+                    ContinuousDriftMeasurement::WassersteinDistance => self.wasserstein_distance,
+                    ContinuousDriftMeasurement::KullbackLeibler => self.kullback_leibler,
+                    ContinuousDriftMeasurement::KolmogorovSmirnov => self.kolmogorov_smirnov,
+                    ContinuousDriftMeasurement::Hellinger => self.hellinger,
+                };
+                let delta = r.drift_magnitude - threshold;
+                let evaluation_result = if delta > 0_f64 {
+                    DriftThresholdEvaluation::Failed(delta)
+                } else {
+                    DriftThresholdEvaluation::Passed
+                };
+                DriftMeasurementEvaluation {
+                    metric: r.drift_type,
+                    evaluation_result,
+                }
+            })
+            .collect();
+        DriftCheck::new(eval)
     }
 }
 
@@ -77,25 +97,35 @@ impl ContinuousDriftContractBuilder {
 
     pub fn build(self) -> ContinuousDriftContract {
         ContinuousDriftContract {
-            jensen_shannon: self.jensen_shannon,
-            population_stability_index: self.population_stability_index,
-            wasserstein_distance: self.wasserstein_distance,
-            kullback_leibler: self.kullback_leibler,
-            kolmogorov_smirnov: self.kolmogorov_smirnov,
-            hellinger: self.hellinger,
+            jensen_shannon: self
+                .jensen_shannon
+                .unwrap_or(defaults::common::JENSEN_SHANNON),
+            population_stability_index: self
+                .population_stability_index
+                .unwrap_or(defaults::common::POPULATION_STABILITY_INDEX),
+            wasserstein_distance: self
+                .wasserstein_distance
+                .unwrap_or(defaults::common::WASSERSTEIN_DISTANCE),
+            kullback_leibler: self
+                .kullback_leibler
+                .unwrap_or(defaults::common::KULLBACK_LEIBLER),
+            kolmogorov_smirnov: self
+                .kolmogorov_smirnov
+                .unwrap_or(defaults::continuous::KOLMOGOROV_SMIRNOV),
+            hellinger: self.hellinger.unwrap_or(defaults::common::HELLINGER),
         }
     }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NullableContinuousDriftContract {
-    pub jensen_shannon: Option<f64>,
-    pub population_stability_index: Option<f64>,
-    pub wasserstein_distance: Option<f64>,
-    pub kullback_leibler: Option<f64>,
-    pub kolmogorov_smirnov: Option<f64>,
-    pub hellinger: Option<f64>,
-    pub null_percentage: Option<f64>,
+    pub jensen_shannon: f64,
+    pub population_stability_index: f64,
+    pub wasserstein_distance: f64,
+    pub kullback_leibler: f64,
+    pub kolmogorov_smirnov: f64,
+    pub hellinger: f64,
+    pub null_percentage: f64,
 }
 
 impl NullableContinuousDriftContract {
@@ -110,23 +140,35 @@ impl NullableContinuousDriftContract {
     /// [`NullableDriftComputationMulti`]: crate::drift::NullableDriftComputationMulti
     pub fn check(
         &self,
-        null_percentage: f64,
-        results: &[DriftComputation<ContinuousDriftType>],
-    ) -> bool {
-        if self.null_percentage.map_or(false, |t| null_percentage > t) {
-            return false;
-        }
-        results.iter().all(|r| {
-            let threshold = match r.drift_type {
-                ContinuousDriftType::JensenShannon => self.jensen_shannon,
-                ContinuousDriftType::PopulationStabilityIndex => self.population_stability_index,
-                ContinuousDriftType::WassersteinDistance => self.wasserstein_distance,
-                ContinuousDriftType::KullbackLeibler => self.kullback_leibler,
-                ContinuousDriftType::KolmogorovSmirnov => self.kolmogorov_smirnov,
-                ContinuousDriftType::Hellinger => self.hellinger,
-            };
-            threshold.map_or(true, |t| r.drift_magnitude <= t)
-        })
+        observed_null_percentage: f64,
+        results: &[DriftComputation<ContinuousDriftMeasurement>],
+    ) -> NullableDriftCheck<ContinuousDriftMeasurement> {
+        let eval = results
+            .iter()
+            .map(|r| {
+                let threshold = match r.drift_type {
+                    ContinuousDriftMeasurement::JensenShannon => self.jensen_shannon,
+                    ContinuousDriftMeasurement::PopulationStabilityIndex => {
+                        self.population_stability_index
+                    }
+                    ContinuousDriftMeasurement::WassersteinDistance => self.wasserstein_distance,
+                    ContinuousDriftMeasurement::KullbackLeibler => self.kullback_leibler,
+                    ContinuousDriftMeasurement::KolmogorovSmirnov => self.kolmogorov_smirnov,
+                    ContinuousDriftMeasurement::Hellinger => self.hellinger,
+                };
+                let delta = r.drift_magnitude - threshold;
+                let evaluation_result = if delta > 0_f64 {
+                    DriftThresholdEvaluation::Failed(delta)
+                } else {
+                    DriftThresholdEvaluation::Passed
+                };
+                DriftMeasurementEvaluation {
+                    metric: r.drift_type,
+                    evaluation_result,
+                }
+            })
+            .collect();
+        NullableDriftCheck::new(eval, self.null_percentage, observed_null_percentage)
     }
 }
 
@@ -189,13 +231,25 @@ impl NullableContinuousDriftContractBuilder {
 
     pub fn build(self) -> NullableContinuousDriftContract {
         NullableContinuousDriftContract {
-            jensen_shannon: self.jensen_shannon,
-            population_stability_index: self.population_stability_index,
-            wasserstein_distance: self.wasserstein_distance,
-            kullback_leibler: self.kullback_leibler,
-            kolmogorov_smirnov: self.kolmogorov_smirnov,
-            hellinger: self.hellinger,
-            null_percentage: self.null_percentage,
+            jensen_shannon: self
+                .jensen_shannon
+                .unwrap_or(defaults::common::JENSEN_SHANNON),
+            population_stability_index: self
+                .population_stability_index
+                .unwrap_or(defaults::common::POPULATION_STABILITY_INDEX),
+            wasserstein_distance: self
+                .wasserstein_distance
+                .unwrap_or(defaults::common::WASSERSTEIN_DISTANCE),
+            kullback_leibler: self
+                .kullback_leibler
+                .unwrap_or(defaults::common::KULLBACK_LEIBLER),
+            kolmogorov_smirnov: self
+                .kolmogorov_smirnov
+                .unwrap_or(defaults::continuous::KOLMOGOROV_SMIRNOV),
+            hellinger: self.hellinger.unwrap_or(defaults::common::HELLINGER),
+            null_percentage: self
+                .null_percentage
+                .unwrap_or(defaults::common::NULL_PERCENTAGE),
         }
     }
 }

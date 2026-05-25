@@ -143,6 +143,42 @@ mod continuous_test {
 
         assert_eq!(4_usize, resolved_set.len());
     }
+
+    #[test]
+    fn below_min_resolves_to_first_bin() {
+        let bins = define_bins();
+        assert_eq!(0_usize, bins.resolve_bin(-1.0));
+        assert_eq!(0_usize, bins.resolve_bin(f32::NEG_INFINITY));
+    }
+
+    #[test]
+    fn above_max_resolves_to_last_bin() {
+        let bins = define_bins();
+        assert_eq!(3_usize, bins.resolve_bin(2.0));
+        assert_eq!(3_usize, bins.resolve_bin(f32::INFINITY));
+    }
+
+    #[test]
+    fn dataset_constructor_bin_count() {
+        // sorted dataset spanning [0, 1] with 4 bins
+        let dataset: Vec<f32> = (0..=100).map(|i| i as f32 / 100.0).collect();
+        let bins = ContinuousBinEdges::new_from_dataset_with_bin_count(&dataset, 4);
+        assert_eq!(4, bins.n_bins());
+    }
+
+    #[test]
+    fn dataset_constructor_all_bins_reachable() {
+        use std::collections::HashSet;
+        let baseline_dataset: Vec<f32> = (0..=100).map(|i| i as f32 / 100.0).collect();
+        let bins = ContinuousBinEdges::new_from_dataset_with_bin_count(&baseline_dataset, 4);
+        let runtime_dataset: Vec<f32> = (-1..=100).map(|i| i as f32 / 100.0).collect();
+        let resolved: HashSet<usize> = runtime_dataset
+            .iter()
+            .map(|&v| bins.resolve_bin(v))
+            .collect();
+        dbg!(&resolved);
+        assert_eq!(4, resolved.len());
+    }
 }
 
 #[cfg(test)]
@@ -180,5 +216,31 @@ mod categorical_test {
         assert_eq!(1_usize, bins.resolve_bin("One"));
         assert_eq!(2_usize, bins.resolve_bin("Three"));
         assert_eq!(3_usize, bins.resolve_bin("Two"));
+    }
+
+    #[test]
+    fn lookup_is_case_sensitive() {
+        let bins = define_bins();
+        // lowercase variants are not in the baseline, should fall to other bucket
+        assert_eq!(OTHER_BUCKET, bins.resolve_bin("four"));
+        assert_eq!(OTHER_BUCKET, bins.resolve_bin("one"));
+    }
+
+    #[test]
+    fn multiple_unknown_keys_all_go_to_other_bucket() {
+        let bins = define_bins();
+        for key in &["x", "y", "z", "unknown", "FOUR"] {
+            assert_eq!(OTHER_BUCKET, bins.resolve_bin(*key));
+        }
+    }
+
+    #[test]
+    fn single_category_baseline() {
+        // n_bins should be 2: one known bin + one other bin
+        let map: HashMap<String, usize> = [("only".to_string(), 0)].into_iter().collect();
+        let bins = CategoricalBinEdges::new(map);
+        assert_eq!(2, bins.n_bins());
+        assert_eq!(0_usize, bins.resolve_bin("only"));
+        assert_eq!(1_usize, bins.resolve_bin("other"));
     }
 }

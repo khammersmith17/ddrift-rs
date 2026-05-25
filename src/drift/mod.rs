@@ -31,19 +31,24 @@ impl StreamingDataDriftMark for FlushModeMark {}
 impl StreamingDataDriftMark for DecayModeMark {}
 
 #[derive(Debug)]
-pub struct DriftComputation<T: crate::core::drift_metrics::DriftMetric> {
+pub struct DriftComputation<T: crate::core::drift_metrics::DriftMeasurement> {
     pub drift_type: T,
     pub drift_magnitude: f64,
 }
 
 #[derive(Debug)]
-pub struct NullableDriftComputation<T: crate::core::drift_metrics::DriftMetric> {
+pub struct DriftComputationMulti<T: crate::core::drift_metrics::DriftMeasurement> {
+    pub drift: Vec<DriftComputation<T>>,
+}
+
+#[derive(Debug)]
+pub struct NullableDriftComputation<T: crate::core::drift_metrics::DriftMeasurement> {
     pub drift: DriftComputation<T>,
     pub null_percentage: f64,
 }
 
 #[derive(Debug)]
-pub struct NullableDriftComputationMulti<T: crate::core::drift_metrics::DriftMetric> {
+pub struct NullableDriftComputationMulti<T: crate::core::drift_metrics::DriftMeasurement> {
     pub drift: Vec<DriftComputation<T>>,
     pub null_percentage: f64,
 }

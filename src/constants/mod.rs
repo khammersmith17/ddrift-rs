@@ -1,5 +1,6 @@
 use std::env;
 use std::sync::OnceLock;
+pub mod drift_thresholds;
 
 static MAX_THREADS: OnceLock<usize> = OnceLock::new();
 

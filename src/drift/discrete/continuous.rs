@@ -1,11 +1,14 @@
-use crate::drift::{DriftComputation, NullableDriftComputation, NullableDriftComputationMulti};
+use crate::drift::{
+    DriftComputation, DriftComputationMulti, NullableDriftComputation,
+    NullableDriftComputationMulti,
+};
 use crate::{
     baseline::continuous::{BaselineContinuousBins, NullableBaselineContinuousBins},
     core::{
         compute_dataset_from_bins_continuous, compute_dataset_from_bins_continuous_null_parallel,
         distribution::QuantileType,
         drift_metrics::{
-            ContinuousDriftType, DriftContainer, compute_drift_continuous,
+            ContinuousDriftMeasurement, DriftContainer, compute_drift_continuous,
             compute_drift_continuous_multi,
         },
         error::{DriftError, DriftExportError},
@@ -134,8 +137,8 @@ impl<T: Float + Send + Sync> ContinuousDataDrift<T> {
     pub fn compute_drift(
         &mut self,
         runtime_data: &[T],
-        drift_type: ContinuousDriftType,
-    ) -> Result<DriftComputation<ContinuousDriftType>, DriftError> {
+        drift_type: ContinuousDriftMeasurement,
+    ) -> Result<DriftComputation<ContinuousDriftMeasurement>, DriftError> {
         self.build_rt_hist(runtime_data)?;
         let drift = compute_drift_continuous(self, drift_type);
         self.clear_rt();
@@ -153,8 +156,8 @@ impl<T: Float + Send + Sync> ContinuousDataDrift<T> {
     pub fn compute_drift_multiple_criteria(
         &mut self,
         runtime_data: &[T],
-        drift_types: &[ContinuousDriftType],
-    ) -> Result<Vec<DriftComputation<ContinuousDriftType>>, DriftError> {
+        drift_types: &[ContinuousDriftMeasurement],
+    ) -> Result<DriftComputationMulti<ContinuousDriftMeasurement>, DriftError> {
         self.build_rt_hist(runtime_data)?;
         let drift = compute_drift_continuous_multi(self, drift_types);
         self.clear_rt();
@@ -291,8 +294,8 @@ impl<T: Float + Send + Sync> NullableContinuousDataDrift<T> {
     pub fn compute_drift(
         &mut self,
         runtime_data: &[Option<T>],
-        drift_type: ContinuousDriftType,
-    ) -> Result<NullableDriftComputation<ContinuousDriftType>, DriftError> {
+        drift_type: ContinuousDriftMeasurement,
+    ) -> Result<NullableDriftComputation<ContinuousDriftMeasurement>, DriftError> {
         self.build_rt_hist(runtime_data)?;
         let null_percentage = self.null_n / self.n;
         let drift = compute_drift_continuous(self, drift_type);
@@ -312,11 +315,11 @@ impl<T: Float + Send + Sync> NullableContinuousDataDrift<T> {
     pub fn compute_drift_multiple_criteria(
         &mut self,
         runtime_data: &[Option<T>],
-        drift_types: &[ContinuousDriftType],
-    ) -> Result<NullableDriftComputationMulti<ContinuousDriftType>, DriftError> {
+        drift_types: &[ContinuousDriftMeasurement],
+    ) -> Result<NullableDriftComputationMulti<ContinuousDriftMeasurement>, DriftError> {
         self.build_rt_hist(runtime_data)?;
         let null_percentage = self.null_n / self.n;
-        let drift = compute_drift_continuous_multi(self, drift_types);
+        let DriftComputationMulti { drift } = compute_drift_continuous_multi(self, drift_types);
         self.clear_rt();
         Ok(NullableDriftComputationMulti {
             drift,
@@ -380,7 +383,10 @@ mod continuous_test {
         let runtime = [1.0, 2.0, 3.0, 4.0];
 
         let drift = psi
-            .compute_drift(&runtime, ContinuousDriftType::PopulationStabilityIndex)
+            .compute_drift(
+                &runtime,
+                ContinuousDriftMeasurement::PopulationStabilityIndex,
+            )
             .unwrap();
         assert!(drift.drift_magnitude.abs() < 1e-9);
     }
@@ -391,7 +397,10 @@ mod continuous_test {
         let mut psi = ContinuousDataDrift::new_from_baseline(None, &baseline).unwrap();
         let runtime = [10.0, 11.0, 12.0, 13.0];
         let drift = psi
-            .compute_drift(&runtime, ContinuousDriftType::PopulationStabilityIndex)
+            .compute_drift(
+                &runtime,
+                ContinuousDriftMeasurement::PopulationStabilityIndex,
+            )
             .unwrap();
         assert!(drift.drift_magnitude > 0.5);
     }
@@ -411,7 +420,7 @@ mod continuous_test {
         let mut det =
             ContinuousDataDrift::new_from_baseline(None, &[1.0, 2.0, 3.0, 4.0, 5.0]).unwrap();
         assert!(
-            det.compute_drift(&[], ContinuousDriftType::PopulationStabilityIndex)
+            det.compute_drift(&[], ContinuousDriftMeasurement::PopulationStabilityIndex)
                 .is_err()
         );
     }
@@ -423,10 +432,16 @@ mod continuous_test {
         let mut det = ContinuousDataDrift::new_from_baseline(None, &baseline).unwrap();
 
         let d1 = det
-            .compute_drift(&runtime, ContinuousDriftType::PopulationStabilityIndex)
+            .compute_drift(
+                &runtime,
+                ContinuousDriftMeasurement::PopulationStabilityIndex,
+            )
             .unwrap();
         let d2 = det
-            .compute_drift(&runtime, ContinuousDriftType::PopulationStabilityIndex)
+            .compute_drift(
+                &runtime,
+                ContinuousDriftMeasurement::PopulationStabilityIndex,
+            )
             .unwrap();
         assert!((d1.drift_magnitude - d2.drift_magnitude).abs() < 1e-12);
     }
@@ -440,10 +455,10 @@ mod continuous_test {
         let mut det = ContinuousDataDrift::new_from_baseline(None, &baseline).unwrap();
 
         for drift_type in [
-            ContinuousDriftType::PopulationStabilityIndex,
-            ContinuousDriftType::KullbackLeibler,
-            ContinuousDriftType::JensenShannon,
-            ContinuousDriftType::WassersteinDistance,
+            ContinuousDriftMeasurement::PopulationStabilityIndex,
+            ContinuousDriftMeasurement::KullbackLeibler,
+            ContinuousDriftMeasurement::JensenShannon,
+            ContinuousDriftMeasurement::WassersteinDistance,
         ] {
             let v = det.compute_drift(&runtime, drift_type).unwrap();
             assert!(

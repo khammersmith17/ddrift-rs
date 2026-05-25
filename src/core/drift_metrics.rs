@@ -1,12 +1,21 @@
-use crate::drift::DriftComputation;
+use crate::drift::{DriftComputation, DriftComputationMulti};
 const STABILITY_EPS: f64 = 1e-12;
 const HALF_CONSTANT: f64 = 0.5_f64;
 
-pub trait DriftMetric {}
+pub trait DriftMeasurement {}
 
+/// Dictates the supported continuous drift metrics in this crate. This enum is non-exhuastive as
+/// support will be added later. All drift computations and containers build off of this set of
+/// avialble measurements. Each metric has a different range of possible values:
+///     JensenShannon: [0, 1]
+///     PopulationStabilityIndex: [0, inf)
+///     WassersteinDistance: [0, 1]
+///     KullbackLeibler: [0, inf)
+///     KolmogorovSmirnov: [0, 1]
+///     Hellinger: [0, 1]
 #[derive(Debug, PartialEq, Copy, Clone)]
 #[non_exhaustive]
-pub enum ContinuousDriftType {
+pub enum ContinuousDriftMeasurement {
     JensenShannon,
     PopulationStabilityIndex,
     WassersteinDistance,
@@ -15,9 +24,9 @@ pub enum ContinuousDriftType {
     Hellinger,
 }
 
-impl DriftMetric for ContinuousDriftType {}
+impl DriftMeasurement for ContinuousDriftMeasurement {}
 
-impl TryFrom<&str> for ContinuousDriftType {
+impl TryFrom<&str> for ContinuousDriftMeasurement {
     type Error = crate::core::error::DriftError;
     fn try_from(val: &str) -> Result<Self, Self::Error> {
         match val {
@@ -32,9 +41,19 @@ impl TryFrom<&str> for ContinuousDriftType {
     }
 }
 
+/// Dictates the supported categorical drift metrics in this crate. This enum is non-exhuastive as
+/// support will be added later. All drift computations and containers build off of this set of
+/// avialble measurements. Each metric has a different range of possible values:
+///     JensenShannon: [0, 1]
+///     PopulationStabilityIndex: [0, inf)
+///     WassersteinDistance: [0, 1]
+///     KullbackLeibler: [0, inf)
+///     ChiSquared: [0, 1]
+///     Hellinger: [0, 1]
+///     GTest: [0, inf)
 #[derive(Debug, PartialEq, Copy, Clone)]
 #[non_exhaustive]
-pub enum CategoricalDriftType {
+pub enum CategoricalDriftMeasurement {
     JensenShannon,
     PopulationStabilityIndex,
     WassersteinDistance,
@@ -44,9 +63,9 @@ pub enum CategoricalDriftType {
     GTest,
 }
 
-impl DriftMetric for CategoricalDriftType {}
+impl DriftMeasurement for CategoricalDriftMeasurement {}
 
-impl TryFrom<&str> for CategoricalDriftType {
+impl TryFrom<&str> for CategoricalDriftMeasurement {
     type Error = crate::core::error::DriftError;
     fn try_from(val: &str) -> Result<Self, Self::Error> {
         match val {
@@ -86,8 +105,8 @@ pub(crate) trait DriftContainer {
 
 pub(crate) fn compute_drift_continuous<T: DriftContainer>(
     drift_container: &T,
-    drift_type: ContinuousDriftType,
-) -> DriftComputation<ContinuousDriftType> {
+    drift_type: ContinuousDriftMeasurement,
+) -> DriftComputation<ContinuousDriftMeasurement> {
     let drift_magnitude = continuous_drift_computation(drift_container, drift_type);
     DriftComputation {
         drift_magnitude,
@@ -97,46 +116,50 @@ pub(crate) fn compute_drift_continuous<T: DriftContainer>(
 
 pub(crate) fn compute_drift_continuous_multi<T: DriftContainer>(
     drift_container: &T,
-    drift_types: &[ContinuousDriftType],
-) -> Vec<DriftComputation<ContinuousDriftType>> {
-    drift_types
-        .iter()
-        .map(|t| compute_drift_continuous(drift_container, *t))
-        .collect()
+    drift_types: &[ContinuousDriftMeasurement],
+) -> DriftComputationMulti<ContinuousDriftMeasurement> {
+    DriftComputationMulti {
+        drift: drift_types
+            .iter()
+            .map(|t| compute_drift_continuous(drift_container, *t))
+            .collect(),
+    }
 }
 
 // Central entry point into the continuous computation methods. DriftContainer trait provides all
 // the methods required to acquire the components needed to compute.
 fn continuous_drift_computation<T: DriftContainer>(
     drift_container: &T,
-    drift_type: ContinuousDriftType,
+    drift_type: ContinuousDriftMeasurement,
 ) -> f64 {
     let (bl_bins, bl_pop_size, rt_bins, rt_pop_size) = drift_container.drift_components();
 
     match drift_type {
-        ContinuousDriftType::JensenShannon => {
+        ContinuousDriftMeasurement::JensenShannon => {
             compute_jensen_shannon_divergence_drift(bl_bins, bl_pop_size, rt_bins, rt_pop_size)
         }
-        ContinuousDriftType::PopulationStabilityIndex => {
+        ContinuousDriftMeasurement::PopulationStabilityIndex => {
             compute_psi(bl_bins, bl_pop_size, rt_bins, rt_pop_size)
         }
-        ContinuousDriftType::KullbackLeibler => {
+        ContinuousDriftMeasurement::KullbackLeibler => {
             compute_kl_divergence_drift(bl_bins, bl_pop_size, rt_bins, rt_pop_size)
         }
-        ContinuousDriftType::WassersteinDistance => {
+        ContinuousDriftMeasurement::WassersteinDistance => {
             continuous_wasserstein_distance(bl_bins, bl_pop_size, rt_bins, rt_pop_size)
         }
-        ContinuousDriftType::KolmogorovSmirnov => {
+        ContinuousDriftMeasurement::KolmogorovSmirnov => {
             kolmogorov_smirnov(bl_bins, bl_pop_size, rt_bins, rt_pop_size)
         }
-        ContinuousDriftType::Hellinger => hellinger(bl_bins, bl_pop_size, rt_bins, rt_pop_size),
+        ContinuousDriftMeasurement::Hellinger => {
+            hellinger(bl_bins, bl_pop_size, rt_bins, rt_pop_size)
+        }
     }
 }
 
 pub(crate) fn compute_drift_categorical<T: DriftContainer>(
     drift_container: &T,
-    drift_type: CategoricalDriftType,
-) -> DriftComputation<CategoricalDriftType> {
+    drift_type: CategoricalDriftMeasurement,
+) -> DriftComputation<CategoricalDriftMeasurement> {
     let drift_magnitude = categorical_drift_computation(drift_container, drift_type);
     DriftComputation {
         drift_magnitude,
@@ -146,36 +169,42 @@ pub(crate) fn compute_drift_categorical<T: DriftContainer>(
 
 pub(crate) fn compute_drift_categorical_multi<T: DriftContainer>(
     drift_container: &T,
-    drift_types: &[CategoricalDriftType],
-) -> Vec<DriftComputation<CategoricalDriftType>> {
-    drift_types
-        .iter()
-        .map(|t| compute_drift_categorical(drift_container, *t))
-        .collect()
+    drift_types: &[CategoricalDriftMeasurement],
+) -> DriftComputationMulti<CategoricalDriftMeasurement> {
+    DriftComputationMulti {
+        drift: drift_types
+            .iter()
+            .map(|t| compute_drift_categorical(drift_container, *t))
+            .collect(),
+    }
 }
 
 fn categorical_drift_computation<T: DriftContainer>(
     drift_container: &T,
-    drift_type: CategoricalDriftType,
+    drift_type: CategoricalDriftMeasurement,
 ) -> f64 {
     let (bl_bins, bl_pop_size, rt_bins, rt_pop_size) = drift_container.drift_components();
 
     match drift_type {
-        CategoricalDriftType::JensenShannon => {
+        CategoricalDriftMeasurement::JensenShannon => {
             compute_jensen_shannon_divergence_drift(bl_bins, bl_pop_size, rt_bins, rt_pop_size)
         }
-        CategoricalDriftType::PopulationStabilityIndex => {
+        CategoricalDriftMeasurement::PopulationStabilityIndex => {
             compute_psi(bl_bins, bl_pop_size, rt_bins, rt_pop_size)
         }
-        CategoricalDriftType::KullbackLeibler => {
+        CategoricalDriftMeasurement::KullbackLeibler => {
             compute_kl_divergence_drift(bl_bins, bl_pop_size, rt_bins, rt_pop_size)
         }
-        CategoricalDriftType::WassersteinDistance => {
+        CategoricalDriftMeasurement::WassersteinDistance => {
             categorical_wasserstein_distance(bl_bins, bl_pop_size, rt_bins, rt_pop_size)
         }
-        CategoricalDriftType::ChiSquared => chi_squared(bl_bins, bl_pop_size, rt_bins, rt_pop_size),
-        CategoricalDriftType::Hellinger => hellinger(bl_bins, bl_pop_size, rt_bins, rt_pop_size),
-        CategoricalDriftType::GTest => g_test(bl_bins, bl_pop_size, rt_bins, rt_pop_size),
+        CategoricalDriftMeasurement::ChiSquared => {
+            chi_squared(bl_bins, bl_pop_size, rt_bins, rt_pop_size)
+        }
+        CategoricalDriftMeasurement::Hellinger => {
+            hellinger(bl_bins, bl_pop_size, rt_bins, rt_pop_size)
+        }
+        CategoricalDriftMeasurement::GTest => g_test(bl_bins, bl_pop_size, rt_bins, rt_pop_size),
     }
 }
 
@@ -496,4 +525,247 @@ fn g_test(baseline_hist: &[f64], bl_n: f64, runtime_hist: &[f64], rt_n: f64) -> 
         })
         .sum();
     g_test_base * 2_f64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // 1000 samples, evenly split across 2 bins
+    fn identical() -> (&'static [f64], f64, &'static [f64], f64) {
+        (&[500.0, 500.0], 1000.0, &[500.0, 500.0], 1000.0)
+    }
+
+    // All baseline mass in bin 0, all runtime mass in bin 1
+    fn disjoint() -> (&'static [f64], f64, &'static [f64], f64) {
+        (&[1000.0, 0.0], 1000.0, &[0.0, 1000.0], 1000.0)
+    }
+
+    // Moderate shift: 70/30 → 30/70
+    fn shifted() -> (&'static [f64], f64, &'static [f64], f64) {
+        (&[700.0, 300.0], 1000.0, &[300.0, 700.0], 1000.0)
+    }
+
+    // --- PSI ---
+
+    #[test]
+    fn psi_identical_is_zero() {
+        let (bl, bl_n, rt, rt_n) = identical();
+        assert!(compute_psi(bl, bl_n, rt, rt_n) < 1e-10);
+    }
+
+    #[test]
+    fn psi_shifted_exceeds_significant_threshold() {
+        // 80/20 → 20/80 flip, expected PSI ≈ 1.66, well above 0.25 threshold
+        let bl = [800.0, 200.0];
+        let rt = [200.0, 800.0];
+        assert!(compute_psi(&bl, 1000.0, &rt, 1000.0) > 0.25);
+    }
+
+    #[test]
+    fn psi_is_nonnegative() {
+        let (bl, bl_n, rt, rt_n) = shifted();
+        assert!(compute_psi(bl, bl_n, rt, rt_n) >= 0.0);
+    }
+
+    // --- KL divergence ---
+
+    #[test]
+    fn kl_identical_is_zero() {
+        let (bl, bl_n, rt, rt_n) = identical();
+        assert!(compute_kl_divergence_drift(bl, bl_n, rt, rt_n) < 1e-10);
+    }
+
+    #[test]
+    fn kl_is_nonnegative() {
+        let (bl, bl_n, rt, rt_n) = shifted();
+        assert!(compute_kl_divergence_drift(bl, bl_n, rt, rt_n) >= 0.0);
+    }
+
+    // --- Jensen-Shannon divergence ---
+
+    #[test]
+    fn jsd_identical_is_zero() {
+        let (bl, bl_n, rt, rt_n) = identical();
+        assert!(compute_jensen_shannon_divergence_drift(bl, bl_n, rt, rt_n) < 1e-10);
+    }
+
+    #[test]
+    fn jsd_is_bounded_zero_to_one() {
+        let (bl, bl_n, rt, rt_n) = shifted();
+        let result = compute_jensen_shannon_divergence_drift(bl, bl_n, rt, rt_n);
+        assert!(result >= 0.0 && result <= 1.0, "JSD out of [0,1]: {result}");
+    }
+
+    #[test]
+    fn jsd_disjoint_is_near_one() {
+        let (bl, bl_n, rt, rt_n) = disjoint();
+        let result = compute_jensen_shannon_divergence_drift(bl, bl_n, rt, rt_n);
+        assert!(
+            result > 0.99,
+            "JSD of disjoint distributions should be ~1, got {result}"
+        );
+    }
+
+    #[test]
+    fn jsd_is_symmetric() {
+        let (bl, bl_n, rt, rt_n) = shifted();
+        let forward = compute_jensen_shannon_divergence_drift(bl, bl_n, rt, rt_n);
+        let backward = compute_jensen_shannon_divergence_drift(rt, rt_n, bl, bl_n);
+        assert!(
+            (forward - backward).abs() < 1e-10,
+            "JSD should be symmetric"
+        );
+    }
+
+    // --- Hellinger distance ---
+
+    #[test]
+    fn hellinger_identical_is_zero() {
+        let (bl, bl_n, rt, rt_n) = identical();
+        assert!(hellinger(bl, bl_n, rt, rt_n) < 1e-10);
+    }
+
+    #[test]
+    fn hellinger_disjoint_is_one() {
+        let (bl, bl_n, rt, rt_n) = disjoint();
+        let result = hellinger(bl, bl_n, rt, rt_n);
+        assert!(
+            (result - 1.0).abs() < 1e-10,
+            "Hellinger of disjoint should be 1, got {result}"
+        );
+    }
+
+    #[test]
+    fn hellinger_is_bounded_zero_to_one() {
+        let (bl, bl_n, rt, rt_n) = shifted();
+        let result = hellinger(bl, bl_n, rt, rt_n);
+        assert!(
+            result >= 0.0 && result <= 1.0,
+            "Hellinger out of [0,1]: {result}"
+        );
+    }
+
+    #[test]
+    fn hellinger_is_symmetric() {
+        let (bl, bl_n, rt, rt_n) = shifted();
+        let forward = hellinger(bl, bl_n, rt, rt_n);
+        let backward = hellinger(rt, rt_n, bl, bl_n);
+        assert!(
+            (forward - backward).abs() < 1e-10,
+            "Hellinger should be symmetric"
+        );
+    }
+
+    // --- Kolmogorov-Smirnov ---
+
+    #[test]
+    fn ks_identical_is_zero() {
+        let (bl, bl_n, rt, rt_n) = identical();
+        assert!(kolmogorov_smirnov(bl, bl_n, rt, rt_n) < 1e-10);
+    }
+
+    #[test]
+    fn ks_disjoint_is_one() {
+        let (bl, bl_n, rt, rt_n) = disjoint();
+        let result = kolmogorov_smirnov(bl, bl_n, rt, rt_n);
+        assert!(
+            (result - 1.0).abs() < 1e-10,
+            "KS of disjoint should be 1, got {result}"
+        );
+    }
+
+    #[test]
+    fn ks_is_bounded_zero_to_one() {
+        let (bl, bl_n, rt, rt_n) = shifted();
+        let result = kolmogorov_smirnov(bl, bl_n, rt, rt_n);
+        assert!(result >= 0.0 && result <= 1.0, "KS out of [0,1]: {result}");
+    }
+
+    // --- Wasserstein (continuous) ---
+
+    #[test]
+    fn continuous_wasserstein_identical_is_zero() {
+        // needs at least 3 bins so tail exclusion doesn't collapse to empty slice
+        let bl = [0.0, 500.0, 500.0, 0.0];
+        let rt = [0.0, 500.0, 500.0, 0.0];
+        assert!(continuous_wasserstein_distance(&bl, 1000.0, &rt, 1000.0) < 1e-10);
+    }
+
+    #[test]
+    fn continuous_wasserstein_shifted_is_nonzero() {
+        let bl = [0.0, 800.0, 200.0, 0.0];
+        let rt = [0.0, 200.0, 800.0, 0.0];
+        assert!(continuous_wasserstein_distance(&bl, 1000.0, &rt, 1000.0) > 0.0);
+    }
+
+    // --- Wasserstein (categorical / TVD) ---
+
+    #[test]
+    fn categorical_wasserstein_identical_is_zero() {
+        let (bl, bl_n, rt, rt_n) = identical();
+        assert!(categorical_wasserstein_distance(bl, bl_n, rt, rt_n) < 1e-10);
+    }
+
+    #[test]
+    fn categorical_wasserstein_disjoint_is_one() {
+        let (bl, bl_n, rt, rt_n) = disjoint();
+        let result = categorical_wasserstein_distance(bl, bl_n, rt, rt_n);
+        // TVD of fully disjoint distributions = 1 (up to numerical eps)
+        assert!(
+            (result - 1.0).abs() < 1e-9,
+            "TVD of disjoint should be ~1, got {result}"
+        );
+    }
+
+    #[test]
+    fn categorical_wasserstein_is_bounded_zero_to_one() {
+        let (bl, bl_n, rt, rt_n) = shifted();
+        let result = categorical_wasserstein_distance(bl, bl_n, rt, rt_n);
+        assert!(result >= 0.0 && result <= 1.0, "TVD out of [0,1]: {result}");
+    }
+
+    // --- Chi-squared ---
+
+    #[test]
+    fn chi_squared_identical_is_zero() {
+        let (bl, bl_n, rt, rt_n) = identical();
+        assert!(chi_squared(bl, bl_n, rt, rt_n) < 1e-10);
+    }
+
+    #[test]
+    fn chi_squared_is_nonnegative() {
+        let (bl, bl_n, rt, rt_n) = shifted();
+        assert!(chi_squared(bl, bl_n, rt, rt_n) >= 0.0);
+    }
+
+    #[test]
+    fn chi_squared_large_shift_is_elevated() {
+        // 90/10 → 10/90 flip
+        let bl = [900.0, 100.0];
+        let rt = [100.0, 900.0];
+        // expected ≈ 1280 for this setup
+        assert!(chi_squared(&bl, 1000.0, &rt, 1000.0) > 100.0);
+    }
+
+    // --- G-test ---
+
+    #[test]
+    fn g_test_identical_is_near_zero() {
+        let (bl, bl_n, rt, rt_n) = identical();
+        assert!(g_test(bl, bl_n, rt, rt_n).abs() < 1e-6);
+    }
+
+    #[test]
+    fn g_test_is_nonnegative() {
+        let (bl, bl_n, rt, rt_n) = shifted();
+        assert!(g_test(bl, bl_n, rt, rt_n) >= 0.0);
+    }
+
+    #[test]
+    fn g_test_large_shift_is_elevated() {
+        let bl = [900.0, 100.0];
+        let rt = [100.0, 900.0];
+        assert!(g_test(&bl, 1000.0, &rt, 1000.0) > 100.0);
+    }
 }

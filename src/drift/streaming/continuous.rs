@@ -4,14 +4,15 @@ use crate::{
     core::{
         distribution::QuantileType,
         drift_metrics::{
-            ContinuousDriftType, DriftContainer, compute_drift_continuous,
+            ContinuousDriftMeasurement, DriftContainer, compute_drift_continuous,
             compute_drift_continuous_multi,
         },
         error::{DriftError, DriftExportError},
     },
     drift::{
-        DecayModeMark, DriftComputation, FlushModeMark, NullableDriftComputation,
-        NullableDriftComputationMulti, StreamingDataDriftMark, stream_mode::StreamModeInner,
+        DecayModeMark, DriftComputation, DriftComputationMulti, FlushModeMark,
+        NullableDriftComputation, NullableDriftComputationMulti, StreamingDataDriftMark,
+        stream_mode::StreamModeInner,
     },
     export,
 };
@@ -252,8 +253,8 @@ impl<T: Float + serde::Serialize, M: StreamingDataDriftMark>
 impl<T: Float, M: StreamingDataDriftMark> NullableStreamingContinuousDataDrift<T, M> {
     pub fn compute_drift(
         &mut self,
-        drift_type: ContinuousDriftType,
-    ) -> Result<NullableDriftComputation<ContinuousDriftType>, DriftError> {
+        drift_type: ContinuousDriftMeasurement,
+    ) -> Result<NullableDriftComputation<ContinuousDriftMeasurement>, DriftError> {
         if self.is_empty() {
             return Err(DriftError::EmptyRuntimeData);
         }
@@ -268,8 +269,8 @@ impl<T: Float, M: StreamingDataDriftMark> NullableStreamingContinuousDataDrift<T
 
     pub fn compute_drift_multiple_criteria(
         &mut self,
-        drift_types: &[ContinuousDriftType],
-    ) -> Result<NullableDriftComputationMulti<ContinuousDriftType>, DriftError> {
+        drift_types: &[ContinuousDriftMeasurement],
+    ) -> Result<NullableDriftComputationMulti<ContinuousDriftMeasurement>, DriftError> {
         if self.is_empty() {
             return Err(DriftError::EmptyRuntimeData);
         }
@@ -277,7 +278,7 @@ impl<T: Float, M: StreamingDataDriftMark> NullableStreamingContinuousDataDrift<T
         self.mode
             .apply_decay(&mut self.stream_bins, &mut self.total_stream_size);
 
-        let drift = compute_drift_continuous_multi(self, drift_types);
+        let DriftComputationMulti { drift } = compute_drift_continuous_multi(self, drift_types);
         Ok(NullableDriftComputationMulti {
             drift,
             null_percentage: self.null_count / self.total_stream_size,
@@ -619,8 +620,8 @@ impl<T: Float + Send + Sync> StreamingContinuousDataDrift<T, FlushModeMark> {
 impl<T: Float, M: StreamingDataDriftMark> StreamingContinuousDataDrift<T, M> {
     pub fn compute_drift(
         &mut self,
-        drift_type: ContinuousDriftType,
-    ) -> Result<DriftComputation<ContinuousDriftType>, DriftError> {
+        drift_type: ContinuousDriftMeasurement,
+    ) -> Result<DriftComputation<ContinuousDriftMeasurement>, DriftError> {
         if self.is_empty() {
             return Err(DriftError::EmptyRuntimeData);
         }
@@ -631,8 +632,8 @@ impl<T: Float, M: StreamingDataDriftMark> StreamingContinuousDataDrift<T, M> {
 
     pub fn compute_drift_multiple_criteria(
         &mut self,
-        drift_types: &[ContinuousDriftType],
-    ) -> Result<Vec<DriftComputation<ContinuousDriftType>>, DriftError> {
+        drift_types: &[ContinuousDriftMeasurement],
+    ) -> Result<DriftComputationMulti<ContinuousDriftMeasurement>, DriftError> {
         if self.is_empty() {
             return Err(DriftError::EmptyRuntimeData);
         }
@@ -728,14 +729,14 @@ mod continuous_tests {
             .unwrap();
 
         let d1 = streaming
-            .compute_drift(ContinuousDriftType::PopulationStabilityIndex)
+            .compute_drift(ContinuousDriftMeasurement::PopulationStabilityIndex)
             .unwrap();
         streaming
             .update_stream_batch(&[3.0, 4.0, 2.0, 2.0, 1.0, 3.0])
             .unwrap();
 
         let d2 = streaming
-            .compute_drift(ContinuousDriftType::PopulationStabilityIndex)
+            .compute_drift(ContinuousDriftMeasurement::PopulationStabilityIndex)
             .unwrap();
 
         assert!(d1.drift_magnitude.abs() < 1e-9);
@@ -771,7 +772,7 @@ mod continuous_tests {
             StreamingContinuousDataDrift::new_flush(&[1.0, 2.0, 3.0, 4.0, 5.0], None, None, None)
                 .unwrap();
         assert!(
-            s.compute_drift(ContinuousDriftType::PopulationStabilityIndex)
+            s.compute_drift(ContinuousDriftMeasurement::PopulationStabilityIndex)
                 .is_err()
         );
     }
@@ -816,7 +817,7 @@ mod continuous_tests {
         )
         .unwrap();
         assert!(
-            s.compute_drift(ContinuousDriftType::PopulationStabilityIndex)
+            s.compute_drift(ContinuousDriftMeasurement::PopulationStabilityIndex)
                 .is_err()
         );
     }
@@ -836,7 +837,7 @@ mod continuous_tests {
         s.update_stream_batch(&data).unwrap();
         assert_eq!(s.total_samples(), 100);
 
-        s.compute_drift(ContinuousDriftType::PopulationStabilityIndex)
+        s.compute_drift(ContinuousDriftMeasurement::PopulationStabilityIndex)
             .unwrap();
         assert!(s.total_samples() < 100);
     }
@@ -856,9 +857,9 @@ mod continuous_tests {
         s_multi.update_stream_batch(&data).unwrap();
         s_multi
             .compute_drift_multiple_criteria(&[
-                ContinuousDriftType::PopulationStabilityIndex,
-                ContinuousDriftType::KullbackLeibler,
-                ContinuousDriftType::JensenShannon,
+                ContinuousDriftMeasurement::PopulationStabilityIndex,
+                ContinuousDriftMeasurement::KullbackLeibler,
+                ContinuousDriftMeasurement::JensenShannon,
             ])
             .unwrap();
         let samples_multi = s_multi.total_samples();
@@ -868,7 +869,7 @@ mod continuous_tests {
             StreamingContinuousDataDrift::new_decay(&baseline, Some(qt2), Some(half_life)).unwrap();
         s_single.update_stream_batch(&data).unwrap();
         s_single
-            .compute_drift(ContinuousDriftType::PopulationStabilityIndex)
+            .compute_drift(ContinuousDriftMeasurement::PopulationStabilityIndex)
             .unwrap();
         let samples_single = s_single.total_samples();
 

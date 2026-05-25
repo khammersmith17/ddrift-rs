@@ -5,12 +5,15 @@ use crate::{
         compute_dataset_from_nullable_bins_categorical,
         compute_dataset_from_nullable_bins_categorical_parallel,
         drift_metrics::{
-            CategoricalDriftType, DriftContainer, compute_drift_categorical,
+            CategoricalDriftMeasurement, DriftContainer, compute_drift_categorical,
             compute_drift_categorical_multi,
         },
         error::{DriftError, DriftExportError},
     },
-    drift::{DriftComputation, NullableDriftComputation, NullableDriftComputationMulti},
+    drift::{
+        DriftComputation, DriftComputationMulti, NullableDriftComputation,
+        NullableDriftComputationMulti,
+    },
     export,
 };
 use std::hash::Hash;
@@ -96,8 +99,8 @@ impl<T: Hash + Ord + Clone> NullableCategoricalDataDrift<T> {
     pub fn compute_drift(
         &mut self,
         runtime_data: &[Option<T>],
-        drift_type: CategoricalDriftType,
-    ) -> Result<NullableDriftComputation<CategoricalDriftType>, DriftError> {
+        drift_type: CategoricalDriftMeasurement,
+    ) -> Result<NullableDriftComputation<CategoricalDriftMeasurement>, DriftError> {
         self.build_rt_hist(runtime_data)?;
         let null_percentage = self.null_n / self.n;
         let drift = compute_drift_categorical(self, drift_type);
@@ -111,11 +114,11 @@ impl<T: Hash + Ord + Clone> NullableCategoricalDataDrift<T> {
     pub fn compute_drift_multiple_criteria(
         &mut self,
         runtime_data: &[Option<T>],
-        drift_types: &[CategoricalDriftType],
-    ) -> Result<NullableDriftComputationMulti<CategoricalDriftType>, DriftError> {
+        drift_types: &[CategoricalDriftMeasurement],
+    ) -> Result<NullableDriftComputationMulti<CategoricalDriftMeasurement>, DriftError> {
         self.build_rt_hist(runtime_data)?;
         let null_percentage = self.null_n / self.n;
-        let drift = compute_drift_categorical_multi(self, drift_types);
+        let DriftComputationMulti { drift } = compute_drift_categorical_multi(self, drift_types);
         self.clear_rt();
         Ok(NullableDriftComputationMulti {
             drift,
@@ -144,8 +147,8 @@ impl<T: Hash + Ord + Clone + Send + Sync> NullableCategoricalDataDrift<T> {
     pub fn compute_drift_par(
         &mut self,
         runtime_data: &[Option<T>],
-        drift_type: CategoricalDriftType,
-    ) -> Result<NullableDriftComputation<CategoricalDriftType>, DriftError> {
+        drift_type: CategoricalDriftMeasurement,
+    ) -> Result<NullableDriftComputation<CategoricalDriftMeasurement>, DriftError> {
         self.build_rt_hist_par(runtime_data)?;
         let null_percentage = self.null_n / self.n;
         let drift = compute_drift_categorical(self, drift_type);
@@ -159,11 +162,11 @@ impl<T: Hash + Ord + Clone + Send + Sync> NullableCategoricalDataDrift<T> {
     pub fn compute_drift_multiple_criteria_par(
         &mut self,
         runtime_data: &[Option<T>],
-        drift_types: &[CategoricalDriftType],
-    ) -> Result<NullableDriftComputationMulti<CategoricalDriftType>, DriftError> {
+        drift_types: &[CategoricalDriftMeasurement],
+    ) -> Result<NullableDriftComputationMulti<CategoricalDriftMeasurement>, DriftError> {
         self.build_rt_hist_par(runtime_data)?;
         let null_percentage = self.null_n / self.n;
-        let drift = compute_drift_categorical_multi(self, drift_types);
+        let DriftComputationMulti { drift } = compute_drift_categorical_multi(self, drift_types);
         self.clear_rt();
         Ok(NullableDriftComputationMulti {
             drift,
@@ -281,8 +284,8 @@ impl<T: Hash + Ord + Clone + Send + Sync> CategoricalDataDrift<T> {
     pub fn compute_drift_par(
         &mut self,
         runtime_data: &[T],
-        drift_type: CategoricalDriftType,
-    ) -> Result<DriftComputation<CategoricalDriftType>, DriftError> {
+        drift_type: CategoricalDriftMeasurement,
+    ) -> Result<DriftComputation<CategoricalDriftMeasurement>, DriftError> {
         self.build_rt_hist_parallel(runtime_data)?;
         let drift = compute_drift_categorical(self, drift_type);
         self.clear_rt();
@@ -303,8 +306,8 @@ impl<T: Hash + Ord + Clone + Send + Sync> CategoricalDataDrift<T> {
     pub fn compute_drift_multiple_criteria_par(
         &mut self,
         runtime_data: &[T],
-        drift_types: &[CategoricalDriftType],
-    ) -> Result<Vec<DriftComputation<CategoricalDriftType>>, DriftError> {
+        drift_types: &[CategoricalDriftMeasurement],
+    ) -> Result<DriftComputationMulti<CategoricalDriftMeasurement>, DriftError> {
         self.build_rt_hist_parallel(runtime_data)?;
         let drift = compute_drift_categorical_multi(self, drift_types);
         self.clear_rt();
@@ -346,8 +349,8 @@ impl<T: Hash + Ord + Clone> CategoricalDataDrift<T> {
     pub fn compute_drift(
         &mut self,
         runtime_data: &[T],
-        drift_type: CategoricalDriftType,
-    ) -> Result<DriftComputation<CategoricalDriftType>, DriftError> {
+        drift_type: CategoricalDriftMeasurement,
+    ) -> Result<DriftComputation<CategoricalDriftMeasurement>, DriftError> {
         self.build_rt_hist(runtime_data)?;
         let drift = compute_drift_categorical(self, drift_type);
         self.clear_rt();
@@ -367,8 +370,8 @@ impl<T: Hash + Ord + Clone> CategoricalDataDrift<T> {
     pub fn compute_drift_multiple_criteria(
         &mut self,
         runtime_data: &[T],
-        drift_types: &[CategoricalDriftType],
-    ) -> Result<Vec<DriftComputation<CategoricalDriftType>>, DriftError> {
+        drift_types: &[CategoricalDriftMeasurement],
+    ) -> Result<DriftComputationMulti<CategoricalDriftMeasurement>, DriftError> {
         self.build_rt_hist(runtime_data)?;
         let drift = compute_drift_categorical_multi(self, drift_types);
         self.clear_rt();
@@ -445,7 +448,10 @@ mod categorical_test {
         let mut psi = CategoricalDataDrift::new(&baseline).unwrap();
         let runtime = ["a", "b", "a", "c"];
         let drift = psi
-            .compute_drift(&runtime, CategoricalDriftType::PopulationStabilityIndex)
+            .compute_drift(
+                &runtime,
+                CategoricalDriftMeasurement::PopulationStabilityIndex,
+            )
             .unwrap();
         assert!(drift.drift_magnitude.abs() < 1e-9);
     }
@@ -456,7 +462,10 @@ mod categorical_test {
         let mut psi = CategoricalDataDrift::new(&baseline).unwrap();
         let runtime = ["x", "x", "x", "x"]; // go to other bucket
         let drift = psi
-            .compute_drift(&runtime, CategoricalDriftType::PopulationStabilityIndex)
+            .compute_drift(
+                &runtime,
+                CategoricalDriftMeasurement::PopulationStabilityIndex,
+            )
             .unwrap();
         assert!(drift.drift_magnitude > 0.5);
     }
@@ -472,7 +481,7 @@ mod categorical_test {
         let mut det = CategoricalDataDrift::new(&["a", "b", "c"]).unwrap();
         let empty: &[&str] = &[];
         assert!(
-            det.compute_drift(empty, CategoricalDriftType::PopulationStabilityIndex)
+            det.compute_drift(empty, CategoricalDriftMeasurement::PopulationStabilityIndex)
                 .is_err()
         );
     }
@@ -486,13 +495,13 @@ mod categorical_test {
         let matching_drift = det
             .compute_drift(
                 &["a", "b", "a", "b", "a"],
-                CategoricalDriftType::PopulationStabilityIndex,
+                CategoricalDriftMeasurement::PopulationStabilityIndex,
             )
             .unwrap();
         let novel_drift = det
             .compute_drift(
                 &["x", "y", "z", "x", "y"],
-                CategoricalDriftType::PopulationStabilityIndex,
+                CategoricalDriftMeasurement::PopulationStabilityIndex,
             )
             .unwrap();
 
@@ -508,10 +517,10 @@ mod categorical_test {
         let mut det = CategoricalDataDrift::new(&baseline).unwrap();
 
         for drift_type in [
-            CategoricalDriftType::PopulationStabilityIndex,
-            CategoricalDriftType::KullbackLeibler,
-            CategoricalDriftType::JensenShannon,
-            CategoricalDriftType::WassersteinDistance,
+            CategoricalDriftMeasurement::PopulationStabilityIndex,
+            CategoricalDriftMeasurement::KullbackLeibler,
+            CategoricalDriftMeasurement::JensenShannon,
+            CategoricalDriftMeasurement::WassersteinDistance,
         ] {
             let v = det.compute_drift(&runtime, drift_type).unwrap();
             assert!(

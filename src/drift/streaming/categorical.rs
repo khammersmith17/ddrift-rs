@@ -3,14 +3,15 @@ use crate::{
     constants,
     core::{
         drift_metrics::{
-            CategoricalDriftType, DriftContainer, compute_drift_categorical,
+            CategoricalDriftMeasurement, DriftContainer, compute_drift_categorical,
             compute_drift_categorical_multi,
         },
         error::{DriftError, DriftExportError},
     },
     drift::{
-        DecayModeMark, DriftComputation, FlushModeMark, NullableDriftComputation,
-        NullableDriftComputationMulti, StreamingDataDriftMark, stream_mode::StreamModeInner,
+        DecayModeMark, DriftComputation, DriftComputationMulti, FlushModeMark,
+        NullableDriftComputation, NullableDriftComputationMulti, StreamingDataDriftMark,
+        stream_mode::StreamModeInner,
     },
     export,
 };
@@ -285,8 +286,8 @@ impl<T: Hash + Ord + Clone> NullableStreamingCategoricalDataDrift<T, DecayModeMa
 impl<T: Hash + Ord + Clone, M: StreamingDataDriftMark> NullableStreamingCategoricalDataDrift<T, M> {
     pub fn compute_drift(
         &mut self,
-        drift_type: CategoricalDriftType,
-    ) -> Result<NullableDriftComputation<CategoricalDriftType>, DriftError> {
+        drift_type: CategoricalDriftMeasurement,
+    ) -> Result<NullableDriftComputation<CategoricalDriftMeasurement>, DriftError> {
         if self.is_empty() {
             return Err(DriftError::EmptyRuntimeData);
         }
@@ -303,8 +304,8 @@ impl<T: Hash + Ord + Clone, M: StreamingDataDriftMark> NullableStreamingCategori
 
     pub fn compute_drift_multiple_criteria(
         &mut self,
-        drift_types: &[CategoricalDriftType],
-    ) -> Result<NullableDriftComputationMulti<CategoricalDriftType>, DriftError> {
+        drift_types: &[CategoricalDriftMeasurement],
+    ) -> Result<NullableDriftComputationMulti<CategoricalDriftMeasurement>, DriftError> {
         if self.is_empty() {
             return Err(DriftError::EmptyRuntimeData);
         }
@@ -315,15 +316,30 @@ impl<T: Hash + Ord + Clone, M: StreamingDataDriftMark> NullableStreamingCategori
             &mut self.null_count,
         );
 
+        let DriftComputationMulti { drift } = compute_drift_categorical_multi(self, drift_types);
+
         Ok(NullableDriftComputationMulti {
-            drift: compute_drift_categorical_multi(self, drift_types),
+            drift,
             null_percentage: self.null_count / self.total_stream_size,
         })
     }
 
-    /// Push a single label into the stream.
+    fn check_flush(&mut self) {
+        if self
+            .mode
+            .needs_flush(self.total_stream_size + constants::FLUSH_CHECK_OFFSET as f64)
+        {
+            self.mode
+                .perform_flush(&mut self.stream_bins, &mut self.total_stream_size)
+        }
+    }
+
     #[inline]
-    pub fn update_stream(&mut self, item_opt: &Option<T>) {
+    fn inner_update_stream<Q>(&mut self, item_opt: Option<&Q>)
+    where
+        T: std::borrow::Borrow<Q>,
+        Q: Ord + Hash + ?Sized,
+    {
         if let Some(item) = item_opt {
             self.stream_bins[self.baseline.resolve_bin(item)] += 1_f64;
         } else {
@@ -333,6 +349,16 @@ impl<T: Hash + Ord + Clone, M: StreamingDataDriftMark> NullableStreamingCategori
         self.total_stream_size += 1_f64;
     }
 
+    /// Push a single label into the stream.
+    pub fn update_stream<Q>(&mut self, item_opt: Option<&Q>)
+    where
+        T: std::borrow::Borrow<Q>,
+        Q: Ord + Hash + ?Sized,
+    {
+        self.check_flush();
+        self.inner_update_stream(item_opt)
+    }
+
     /// Push a batch of labels into the stream.
     ///
     /// Returns [`DriftError::EmptyRuntimeData`] if the slice is empty.
@@ -340,7 +366,10 @@ impl<T: Hash + Ord + Clone, M: StreamingDataDriftMark> NullableStreamingCategori
         if runtime_data.is_empty() {
             return Err(DriftError::EmptyRuntimeData);
         }
-        runtime_data.iter().for_each(|cat| self.update_stream(cat));
+        self.check_flush();
+        runtime_data
+            .iter()
+            .for_each(|cat| self.inner_update_stream(cat.as_ref()));
 
         Ok(())
     }
@@ -654,8 +683,8 @@ impl<T: Hash + Ord + Clone> StreamingCategoricalDataDrift<T, DecayModeMark> {
 impl<T: Hash + Ord + Clone, M: StreamingDataDriftMark> StreamingCategoricalDataDrift<T, M> {
     pub fn compute_drift(
         &mut self,
-        drift_type: CategoricalDriftType,
-    ) -> Result<DriftComputation<CategoricalDriftType>, DriftError> {
+        drift_type: CategoricalDriftMeasurement,
+    ) -> Result<DriftComputation<CategoricalDriftMeasurement>, DriftError> {
         if self.is_empty() {
             return Err(DriftError::EmptyRuntimeData);
         }
@@ -667,8 +696,8 @@ impl<T: Hash + Ord + Clone, M: StreamingDataDriftMark> StreamingCategoricalDataD
 
     pub fn compute_drift_multiple_criteria(
         &mut self,
-        drift_types: &[CategoricalDriftType],
-    ) -> Result<Vec<DriftComputation<CategoricalDriftType>>, DriftError> {
+        drift_types: &[CategoricalDriftMeasurement],
+    ) -> Result<DriftComputationMulti<CategoricalDriftMeasurement>, DriftError> {
         if self.is_empty() {
             return Err(DriftError::EmptyRuntimeData);
         }
@@ -688,13 +717,21 @@ impl<T: Hash + Ord + Clone, M: StreamingDataDriftMark> StreamingCategoricalDataD
     }
 
     #[inline]
-    fn inner_update_stream(&mut self, example: &T) {
+    fn inner_update_stream<Q>(&mut self, example: &Q)
+    where
+        T: std::borrow::Borrow<Q>,
+        Q: Hash + Ord + ?Sized,
+    {
         let idx = self.baseline.resolve_bin(example);
         self.stream_bins[idx] += 1_f64;
         self.total_stream_size += 1_f64;
     }
 
-    pub fn update_stream(&mut self, example: &T) {
+    pub fn update_stream<Q>(&mut self, example: &Q)
+    where
+        T: std::borrow::Borrow<Q>,
+        Q: Hash + Ord + ?Sized,
+    {
         self.check_flush();
         self.inner_update_stream(example);
     }
@@ -761,7 +798,7 @@ mod categorical_tests {
 
         streaming.update_stream_batch(&["a", "b"]).unwrap();
         let d1 = streaming
-            .compute_drift(CategoricalDriftType::PopulationStabilityIndex)
+            .compute_drift(CategoricalDriftMeasurement::PopulationStabilityIndex)
             .unwrap();
         let mut stream = Vec::new();
 
@@ -774,7 +811,7 @@ mod categorical_tests {
         }
         streaming.update_stream_batch(&stream).unwrap();
         let d2 = streaming
-            .compute_drift(CategoricalDriftType::PopulationStabilityIndex)
+            .compute_drift(CategoricalDriftMeasurement::PopulationStabilityIndex)
             .unwrap();
 
         assert_eq!(streaming.total_samples(), 992);
@@ -793,7 +830,7 @@ mod categorical_tests {
     fn categorical_streaming_compute_on_empty_returns_err() {
         let mut s = StreamingCategoricalDataDrift::new_flush(&["a", "b"], None, None).unwrap();
         assert!(
-            s.compute_drift(CategoricalDriftType::PopulationStabilityIndex)
+            s.compute_drift(CategoricalDriftMeasurement::PopulationStabilityIndex)
                 .is_err()
         );
     }
@@ -816,7 +853,7 @@ mod categorical_tests {
 
         // drift should be elevated since all traffic is in the other bin
         let drift = s
-            .compute_drift(CategoricalDriftType::PopulationStabilityIndex)
+            .compute_drift(CategoricalDriftMeasurement::PopulationStabilityIndex)
             .unwrap();
         assert!(drift.drift_magnitude > 0.5);
     }
@@ -842,7 +879,7 @@ mod categorical_tests {
         )
         .unwrap();
         assert!(
-            s.compute_drift(CategoricalDriftType::PopulationStabilityIndex)
+            s.compute_drift(CategoricalDriftMeasurement::PopulationStabilityIndex)
                 .is_err()
         );
     }
@@ -862,7 +899,7 @@ mod categorical_tests {
         s.update_stream_batch(&data).unwrap();
         assert_eq!(s.total_samples(), 100);
 
-        s.compute_drift(CategoricalDriftType::PopulationStabilityIndex)
+        s.compute_drift(CategoricalDriftMeasurement::PopulationStabilityIndex)
             .unwrap();
         assert!(s.total_samples() < 100);
     }
@@ -882,9 +919,9 @@ mod categorical_tests {
         s_multi.update_stream_batch(&data).unwrap();
         s_multi
             .compute_drift_multiple_criteria(&[
-                CategoricalDriftType::PopulationStabilityIndex,
-                CategoricalDriftType::KullbackLeibler,
-                CategoricalDriftType::JensenShannon,
+                CategoricalDriftMeasurement::PopulationStabilityIndex,
+                CategoricalDriftMeasurement::KullbackLeibler,
+                CategoricalDriftMeasurement::JensenShannon,
             ])
             .unwrap();
         let samples_multi = s_multi.total_samples();
@@ -896,7 +933,7 @@ mod categorical_tests {
         .unwrap();
         s_single.update_stream_batch(&data).unwrap();
         s_single
-            .compute_drift(CategoricalDriftType::PopulationStabilityIndex)
+            .compute_drift(CategoricalDriftMeasurement::PopulationStabilityIndex)
             .unwrap();
         let samples_single = s_single.total_samples();
 
