@@ -1,7 +1,7 @@
 use crate::core::drift_metrics::DriftMeasurement;
 pub mod categorical;
 pub mod continuous;
-mod drift_check;
+pub mod drift_check;
 
 pub enum DriftState {
     Healthy,
@@ -31,8 +31,8 @@ impl DriftState {
 }
 
 pub struct DriftCheck<T: DriftMeasurement> {
-    results: Vec<DriftMeasurementEvaluation<T>>,
-    state: DriftState,
+    pub results: Vec<DriftMeasurementEvaluation<T>>,
+    pub state: DriftState,
 }
 
 impl<T: DriftMeasurement> DriftCheck<T> {
@@ -43,7 +43,7 @@ impl<T: DriftMeasurement> DriftCheck<T> {
 }
 
 pub struct DriftMeasurementEvaluation<T: DriftMeasurement> {
-    metric: T,
+    pub metric: T,
     evaluation_result: DriftThresholdEvaluation,
 }
 
@@ -69,9 +69,9 @@ impl NullThresholdEvaluation {
 }
 
 pub struct NullableDriftCheck<T: DriftMeasurement> {
-    results: Vec<DriftMeasurementEvaluation<T>>,
-    null_state: NullThresholdEvaluation,
-    state: DriftState,
+    pub results: Vec<DriftMeasurementEvaluation<T>>,
+    pub null_state: NullThresholdEvaluation,
+    pub state: DriftState,
 }
 
 impl<T: DriftMeasurement> NullableDriftCheck<T> {

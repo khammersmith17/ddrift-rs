@@ -1,3 +1,5 @@
+#[cfg(feature = "arrow")]
+pub mod arrow;
 pub mod baseline;
 pub(crate) mod constants;
 pub mod contract;
@@ -11,7 +13,7 @@ use core::{
     error::DriftError,
 };
 use drift::{
-    DriftComputation, DriftComputationMulti, NullableDriftComputationMulti,
+    DriftComputationMulti, NullableDriftComputationMulti,
     discrete::{
         categorical::{CategoricalDataDrift, NullableCategoricalDataDrift},
         continuous::ContinuousDataDrift,

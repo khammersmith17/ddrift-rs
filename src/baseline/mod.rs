@@ -1,3 +1,5 @@
+#[cfg(feature = "arrow")]
+pub mod arrow;
 pub mod categorical;
 pub mod continuous;
 

@@ -7,8 +7,26 @@ use crate::{
     },
     export::{ContinuousDriftBaselineExport, NullableContinuousDriftBaselineExport},
 };
+#[cfg(feature = "arrow")]
+use arrow::array::{Float32Array, Float64Array};
 use num_traits::Float;
 use std::cmp::Ordering;
+
+#[cfg(feature = "arrow")]
+fn sort_float32_array(array: &Float32Array) -> (Vec<f32>, usize) {
+    let mut concrete: Vec<f32> = array.iter().filter_map(|entry| entry).collect();
+    concrete.sort_by(|a, b| a.total_cmp(b));
+    let concrete_len = concrete.len();
+    (concrete, array.len() - concrete_len)
+}
+
+#[cfg(feature = "arrow")]
+fn sort_float64_array(array: &Float64Array) -> (Vec<f64>, usize) {
+    let mut concrete: Vec<f64> = array.iter().filter_map(|entry| entry).collect();
+    concrete.sort_by(|a, b| a.total_cmp(b));
+    let concrete_len = concrete.len();
+    (concrete, array.len() - concrete_len)
+}
 
 // Non Option NaNs are not supported.
 fn dataset_contains_nans<T: Float>(data: &[T]) -> bool {
@@ -90,6 +108,40 @@ impl<T: Float> NullableBaselineContinuousBins<T> {
     }
 }
 
+#[cfg(feature = "arrow")]
+impl NullableBaselineContinuousBins<f32> {
+    pub(crate) fn from_arrow32(
+        array: &Float32Array,
+        quantile_type_opt: Option<QuantileType>,
+    ) -> NullableBaselineContinuousBins<f32> {
+        let sample_size = array.len() as f64;
+        let (sorted_baseline, null_count) = sort_float32_array(array);
+        NullableBaselineContinuousBins::from_sorted_baseline(
+            sorted_baseline,
+            sample_size,
+            null_count,
+            quantile_type_opt.unwrap_or_default(),
+        )
+    }
+}
+
+#[cfg(feature = "arrow")]
+impl NullableBaselineContinuousBins<f64> {
+    pub(crate) fn from_arrow64(
+        array: &Float64Array,
+        quantile_type_opt: Option<QuantileType>,
+    ) -> NullableBaselineContinuousBins<f64> {
+        let sample_size = array.len() as f64;
+        let (sorted_baseline, null_count) = sort_float64_array(array);
+        NullableBaselineContinuousBins::from_sorted_baseline(
+            sorted_baseline,
+            sample_size,
+            null_count,
+            quantile_type_opt.unwrap_or_default(),
+        )
+    }
+}
+
 impl<T: Float + Send + Sync> NullableBaselineContinuousBins<T> {
     pub fn new(
         baseline_data: &[Option<T>],
@@ -98,6 +150,20 @@ impl<T: Float + Send + Sync> NullableBaselineContinuousBins<T> {
         let sample_size = baseline_data.len() as f64;
         let quantile_type = quantile_type_opt.unwrap_or_default();
         let (sorted_baseline, null_count) = sort_baseline_data_opt(baseline_data)?;
+        Ok(NullableBaselineContinuousBins::from_sorted_baseline(
+            sorted_baseline,
+            sample_size,
+            null_count,
+            quantile_type,
+        ))
+    }
+
+    fn from_sorted_baseline(
+        sorted_baseline: Vec<T>,
+        sample_size: f64,
+        null_count: usize,
+        quantile_type: QuantileType,
+    ) -> NullableBaselineContinuousBins<T> {
         let bin_edges: ContinuousBinEdges<T> =
             ContinuousBinEdges::new_from_dataset_with_quantile_type(
                 &sorted_baseline,
@@ -106,13 +172,13 @@ impl<T: Float + Send + Sync> NullableBaselineContinuousBins<T> {
 
         let baseline_hist = compute_dataset_from_bins_continuous(&sorted_baseline, &bin_edges);
 
-        Ok(NullableBaselineContinuousBins {
+        NullableBaselineContinuousBins {
             bin_edges,
             baseline_hist,
             quantile_type,
             sample_size,
             null_count: null_count as f64,
-        })
+        }
     }
 
     pub(crate) fn reset(&mut self, baseline_data: &[Option<T>]) -> Result<(), DriftError> {
