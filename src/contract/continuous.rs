@@ -24,7 +24,7 @@ impl ContinuousDriftContract {
         let eval = results
             .iter()
             .map(|r| {
-                let threshold = match r.drift_type {
+                let upper_threshold = match r.drift_type {
                     ContinuousDriftMeasurement::JensenShannon => self.jensen_shannon,
                     ContinuousDriftMeasurement::PopulationStabilityIndex => {
                         self.population_stability_index
@@ -34,7 +34,7 @@ impl ContinuousDriftContract {
                     ContinuousDriftMeasurement::KolmogorovSmirnov => self.kolmogorov_smirnov,
                     ContinuousDriftMeasurement::Hellinger => self.hellinger,
                 };
-                let delta = r.drift_magnitude - threshold;
+                let delta = r.drift_magnitude - upper_threshold;
                 let evaluation_result = if delta > 0_f64 {
                     DriftThresholdEvaluation::Failed(delta)
                 } else {
@@ -146,7 +146,7 @@ impl NullableContinuousDriftContract {
         let eval = results
             .iter()
             .map(|r| {
-                let threshold = match r.drift_type {
+                let upper_threshold = match r.drift_type {
                     ContinuousDriftMeasurement::JensenShannon => self.jensen_shannon,
                     ContinuousDriftMeasurement::PopulationStabilityIndex => {
                         self.population_stability_index
@@ -156,7 +156,7 @@ impl NullableContinuousDriftContract {
                     ContinuousDriftMeasurement::KolmogorovSmirnov => self.kolmogorov_smirnov,
                     ContinuousDriftMeasurement::Hellinger => self.hellinger,
                 };
-                let delta = r.drift_magnitude - threshold;
+                let delta = r.drift_magnitude - upper_threshold;
                 let evaluation_result = if delta > 0_f64 {
                     DriftThresholdEvaluation::Failed(delta)
                 } else {

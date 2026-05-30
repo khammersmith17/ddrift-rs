@@ -1,5 +1,7 @@
 pub mod bin_edges;
 pub mod dataset_view;
+#[cfg(feature = "arrow")]
+pub(crate) mod ddrift_arrow;
 pub mod distribution;
 pub mod drift_metrics;
 pub mod error;
@@ -24,15 +26,16 @@ pub(crate) fn compute_dataset_from_bins_continuous<T: Float + Send + Sync>(
     }
 }
 
-pub(crate) fn compute_dataset_from_bins_continuous_null_parallel<T: Float + Send + Sync>(
+pub(crate) fn compute_nullable_dataset_from_bins_continuous<T: Float + Send + Sync>(
     dataset: &[Option<T>],
     edges: &ContinuousBinEdges<T>,
 ) -> (Vec<f64>, f64) {
-    opt::continuous::parallel_approx_dataset_nullable(
-        dataset,
-        edges,
-        get_thread_count(dataset.len()),
-    )
+    let thread_count = get_thread_count(dataset.len());
+    if thread_count > 1 {
+        opt::continuous::parallel_approx_dataset_nullable(dataset, edges, thread_count)
+    } else {
+        compute_nullable_dataset_from_bins_continuous_seq(dataset, edges)
+    }
 }
 
 fn compute_dataset_from_bins_continuous_seq<T: Float>(
@@ -59,6 +62,22 @@ pub(crate) fn compute_dataset_from_bins_categorical_parallel<
     } else {
         compute_dataset_from_bins_categorical(dataset, edges)
     }
+}
+
+fn compute_nullable_dataset_from_bins_continuous_seq<T: Float>(
+    dataset: &[Option<T>],
+    edges: &ContinuousBinEdges<T>,
+) -> (Vec<f64>, f64) {
+    let mut null_count = 0_f64;
+    let mut hist = vec![0_f64; edges.n_bins()];
+    dataset.iter().for_each(|e_opt| {
+        if let Some(e) = e_opt {
+            hist[edges.resolve_bin(*e)] += 1_f64
+        } else {
+            null_count += 1_f64;
+        }
+    });
+    (hist, null_count)
 }
 
 pub(crate) fn compute_dataset_from_nullable_bins_categorical<'a, T: Hash + Ord + Clone>(

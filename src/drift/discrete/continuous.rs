@@ -5,7 +5,7 @@ use crate::drift::{
 use crate::{
     baseline::continuous::{BaselineContinuousBins, NullableBaselineContinuousBins},
     core::{
-        compute_dataset_from_bins_continuous, compute_dataset_from_bins_continuous_null_parallel,
+        compute_dataset_from_bins_continuous, compute_nullable_dataset_from_bins_continuous,
         distribution::QuantileType,
         drift_metrics::{
             ContinuousDriftMeasurement, DriftContainer, compute_drift_continuous,
@@ -343,10 +343,8 @@ impl<T: Float + Send + Sync> NullableContinuousDataDrift<T> {
             return Err(DriftError::EmptyRuntimeData);
         }
         self.n = runtime_data.len() as f64;
-        let (bins, null_count) = compute_dataset_from_bins_continuous_null_parallel(
-            runtime_data,
-            &self.baseline.bin_edges(),
-        );
+        let (bins, null_count) =
+            compute_nullable_dataset_from_bins_continuous(runtime_data, &self.baseline.bin_edges());
         self.null_n = null_count as f64;
         self.rt_bins = bins;
         Ok(())

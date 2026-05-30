@@ -16,8 +16,6 @@ pub struct CategoricalDriftContract {
 }
 
 impl CategoricalDriftContract {
-    /// Returns `true` if every result whose metric has a configured threshold is at or below that
-    /// threshold. Results for metrics with no threshold always pass.
     pub fn check(
         &self,
         results: &[DriftComputation<CategoricalDriftMeasurement>],
@@ -25,7 +23,7 @@ impl CategoricalDriftContract {
         let eval = results
             .iter()
             .map(|r| {
-                let threshold = match r.drift_type {
+                let upper_threshold = match r.drift_type {
                     CategoricalDriftMeasurement::JensenShannon => self.jensen_shannon,
                     CategoricalDriftMeasurement::PopulationStabilityIndex => {
                         self.population_stability_index
@@ -36,7 +34,7 @@ impl CategoricalDriftContract {
                     CategoricalDriftMeasurement::Hellinger => self.hellinger,
                     CategoricalDriftMeasurement::GTest => self.g_test,
                 };
-                let delta = r.drift_magnitude - threshold;
+                let delta = r.drift_magnitude - upper_threshold;
                 let evaluation_result = if delta > 0_f64 {
                     DriftThresholdEvaluation::Failed(delta)
                 } else {
@@ -142,15 +140,6 @@ pub struct NullableCategoricalDriftContract {
 }
 
 impl NullableCategoricalDriftContract {
-    /// Returns `true` if the null rate and every drift result with a configured threshold are at
-    /// or below their respective thresholds. Metrics and the null rate with no threshold always
-    /// pass.
-    ///
-    /// `null_percentage` and `results` map directly to the fields of
-    /// [`NullableDriftComputation`] and [`NullableDriftComputationMulti`].
-    ///
-    /// [`NullableDriftComputation`]: crate::drift::NullableDriftComputation
-    /// [`NullableDriftComputationMulti`]: crate::drift::NullableDriftComputationMulti
     pub fn check(
         &self,
         observed_null_percentage: f64,
@@ -159,7 +148,7 @@ impl NullableCategoricalDriftContract {
         let eval = results
             .iter()
             .map(|r| {
-                let threshold = match r.drift_type {
+                let upper_threshold = match r.drift_type {
                     CategoricalDriftMeasurement::JensenShannon => self.jensen_shannon,
                     CategoricalDriftMeasurement::PopulationStabilityIndex => {
                         self.population_stability_index
@@ -170,7 +159,7 @@ impl NullableCategoricalDriftContract {
                     CategoricalDriftMeasurement::Hellinger => self.hellinger,
                     CategoricalDriftMeasurement::GTest => self.g_test,
                 };
-                let delta = r.drift_magnitude - threshold;
+                let delta = r.drift_magnitude - upper_threshold;
                 let evaluation_result = if delta > 0_f64 {
                     DriftThresholdEvaluation::Failed(delta)
                 } else {

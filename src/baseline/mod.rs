@@ -1,7 +1,7 @@
-#[cfg(feature = "arrow")]
-pub mod arrow;
 pub mod categorical;
 pub mod continuous;
+#[cfg(feature = "arrow")]
+pub mod ddrift_arrow;
 
 pub use categorical::{BaselineCategoricalBins, NullableBaselineCategoricalBins};
 pub use continuous::{BaselineContinuousBins, NullableBaselineContinuousBins};

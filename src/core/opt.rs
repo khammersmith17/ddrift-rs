@@ -8,6 +8,139 @@ use crate::constants::get_thread_count;
 * Reduce local element wise count into global bins by folding the local bins.
 */
 
+#[cfg(feature = "arrow")]
+pub(crate) mod arrow_opt {
+    use arrow::buffer::NullBuffer;
+    use num_traits::Float;
+    use std::hash::Hash;
+
+    pub(crate) fn parallel_approx_arrow_cont<T: Float + Send + Sync>(
+        dataset: &[T],
+        bin_edges: &super::ContinuousBinEdges<T>,
+        null_buffer: Option<&NullBuffer>,
+        thread_count: usize,
+    ) -> (Vec<f64>, f64) {
+        if let Some(null_buff) = null_buffer {
+            cont_inner(dataset, bin_edges, null_buff, thread_count)
+        } else {
+            (
+                super::continuous::parallel_approx_dataset(dataset, bin_edges, thread_count),
+                0_f64,
+            )
+        }
+    }
+
+    fn cont_inner<T: Float + Send + Sync>(
+        dataset: &[T],
+        bin_edges: &super::ContinuousBinEdges<T>,
+        null_buffer: &NullBuffer,
+        thread_count: usize,
+    ) -> (Vec<f64>, f64) {
+        let n = dataset.len();
+        let chunk_size = (n + thread_count - 1) / thread_count;
+        let n_bins = bin_edges.n_bins();
+
+        std::thread::scope(|s| {
+            dataset
+                .chunks(chunk_size) // last slice is remainder
+                .enumerate()
+                .map(|(shard_offset, dataset_chunk)| {
+                    s.spawn(move || {
+                        let mut null_count = 0_f64;
+                        let mut local_hist = vec![0_f64; n_bins];
+                        let shard_base_offset = shard_offset * chunk_size;
+                        for (local_offset, ex) in dataset_chunk.iter().enumerate() {
+                            let global_offset = shard_base_offset + local_offset;
+                            if null_buffer.is_valid(global_offset) {
+                                local_hist[bin_edges.resolve_bin(*ex)] += 1_f64;
+                            } else {
+                                null_count += 1_f64;
+                            }
+                        }
+                        (local_hist, null_count)
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|t| t.join().unwrap()) // safe unwrap: thread will not panic
+                .fold(
+                    (vec![0_f64; n_bins], 0_f64),
+                    |(mut acc_hist, mut acc_null_count), (local_hist, local_null_count)| {
+                        acc_null_count += local_null_count;
+                        acc_hist
+                            .iter_mut()
+                            .zip(local_hist.iter())
+                            .for_each(|(a, b)| *a += b);
+                        (acc_hist, acc_null_count)
+                    },
+                )
+        })
+    }
+
+    pub(crate) fn parallel_approx_arrow_cat<T: Hash + Ord + Clone + Send + Sync>(
+        dataset: &[T],
+        bin_edges: &super::CategoricalBinEdges<T>,
+        null_buffer: Option<&NullBuffer>,
+        thread_count: usize,
+    ) -> (Vec<f64>, f64) {
+        if let Some(null_buff) = null_buffer {
+            cat_inner(dataset, bin_edges, null_buff, thread_count)
+        } else {
+            (
+                super::categorical::parallel_approx_dataset(dataset, bin_edges),
+                0_f64,
+            )
+        }
+    }
+
+    fn cat_inner<T: Hash + Ord + Clone + Send + Sync>(
+        dataset: &[T],
+        bin_edges: &super::CategoricalBinEdges<T>,
+        null_buffer: &NullBuffer,
+        thread_count: usize,
+    ) -> (Vec<f64>, f64) {
+        let n = dataset.len();
+        let chunk_size = (n + thread_count - 1) / thread_count;
+        let n_bins = bin_edges.n_bins();
+
+        std::thread::scope(|s| {
+            dataset
+                .chunks(chunk_size) // last slice is remainder
+                .enumerate()
+                .map(|(shard_offset, dataset_chunk)| {
+                    s.spawn(move || {
+                        let mut null_count = 0_f64;
+                        let mut local_hist = vec![0_f64; n_bins];
+                        let shard_base_offset = shard_offset * chunk_size;
+                        for (local_offset, ex) in dataset_chunk.iter().enumerate() {
+                            let global_offset = shard_base_offset + local_offset;
+                            if null_buffer.is_valid(global_offset) {
+                                local_hist[bin_edges.resolve_bin(ex)] += 1_f64;
+                            } else {
+                                null_count += 1_f64;
+                            }
+                        }
+                        (local_hist, null_count)
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|t| t.join().unwrap()) // safe unwrap: thread will not panic
+                .fold(
+                    (vec![0_f64; n_bins], 0_f64),
+                    |(mut acc_hist, mut acc_null_count), (local_hist, local_null_count)| {
+                        acc_null_count += local_null_count;
+                        acc_hist
+                            .iter_mut()
+                            .zip(local_hist.iter())
+                            .for_each(|(a, b)| *a += b);
+                        (acc_hist, acc_null_count)
+                    },
+                )
+        })
+    }
+}
+
 pub(crate) mod continuous {
     use num_traits::Float;
 

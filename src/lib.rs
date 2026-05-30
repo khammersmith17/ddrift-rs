@@ -1,9 +1,9 @@
-#[cfg(feature = "arrow")]
-pub mod arrow;
 pub mod baseline;
 pub(crate) mod constants;
 pub mod contract;
 pub mod core;
+#[cfg(feature = "arrow")]
+pub mod ddrift_arrow;
 pub mod drift;
 pub mod export;
 use core::{
