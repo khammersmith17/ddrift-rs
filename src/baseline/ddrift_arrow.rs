@@ -107,36 +107,41 @@ impl ArrowBaselineColumn {
                 )?)
             }
             DataType::Utf8 => {
-                let typed = array.as_any().downcast_ref::<array::StringArray>().unwrap();
-                let data: Vec<Option<String>> =
-                    typed.iter().map(|v| v.map(str::to_owned)).collect();
-                ArrowBaselineContainer::String(NullableBaselineCategoricalBins::new(&data)?)
+                let typed_array = array.as_any().downcast_ref::<array::StringArray>().unwrap();
+                let baseline_bins =
+                    NullableBaselineCategoricalBins::from_string_array(&typed_array)?;
+
+                ArrowBaselineContainer::String(baseline_bins)
             }
             DataType::LargeUtf8 => {
-                let typed = array
+                let typed_array = array
                     .as_any()
                     .downcast_ref::<array::LargeStringArray>()
                     .unwrap();
-                let data: Vec<Option<String>> =
-                    typed.iter().map(|v| v.map(str::to_owned)).collect();
-                ArrowBaselineContainer::String(NullableBaselineCategoricalBins::new(&data)?)
+                let baseline_bins =
+                    NullableBaselineCategoricalBins::from_string_array(&typed_array)?;
+                ArrowBaselineContainer::String(baseline_bins)
             }
             DataType::Dictionary(_, value_type)
                 if matches!(value_type.as_ref(), DataType::Utf8 | DataType::LargeUtf8) =>
             {
                 let utf8 = arrow::compute::cast(&*array, &DataType::Utf8)?;
-                let typed = utf8.as_any().downcast_ref::<array::StringArray>().unwrap();
-                let data: Vec<Option<String>> =
-                    typed.iter().map(|v| v.map(str::to_owned)).collect();
-                ArrowBaselineContainer::String(NullableBaselineCategoricalBins::new(&data)?)
+                let typed_array = utf8.as_any().downcast_ref::<array::StringArray>().unwrap();
+
+                let baseline_bins =
+                    NullableBaselineCategoricalBins::from_string_array(&typed_array)?;
+
+                ArrowBaselineContainer::String(baseline_bins)
             }
             DataType::Boolean => {
-                let typed = array
+                let typed_array = array
                     .as_any()
                     .downcast_ref::<array::BooleanArray>()
                     .unwrap();
-                let data: Vec<Option<bool>> = typed.iter().collect();
-                ArrowBaselineContainer::Boolean(NullableBaselineCategoricalBins::new(&data)?)
+
+                let baseline_bins =
+                    NullableBaselineCategoricalBins::from_boolean_array(&typed_array)?;
+                ArrowBaselineContainer::Boolean(baseline_bins)
             }
             other => {
                 return Err(format!("unsupported Arrow type for drift baseline: {other}").into());

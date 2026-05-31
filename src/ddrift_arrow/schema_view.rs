@@ -1,8 +1,6 @@
-use super::candidate::ArrowCandidateTable;
 use crate::baseline::ddrift_arrow::ArrowBaselineTable;
-use ahash::{HashMap, HashMapExt};
+use ahash::HashMap;
 use arrow::{datatypes::DataType, record_batch::RecordBatch};
-use std::collections::{HashSet, hash_set::Difference};
 
 pub(crate) fn validate_schema(
     baseline_schema: &SchemaView,
@@ -30,15 +28,6 @@ pub(crate) struct SchemaView {
 
 impl SchemaView {
     pub(crate) fn from_baseline_table(table: &ArrowBaselineTable) -> SchemaView {
-        let schema: HashMap<String, DataType> = table
-            .table
-            .iter()
-            .map(|(name, entry)| (name.clone(), entry.arrow_type.clone()))
-            .collect();
-        SchemaView { schema }
-    }
-
-    pub(crate) fn from_candidate_table(table: &ArrowCandidateTable) -> SchemaView {
         let schema: HashMap<String, DataType> = table
             .table
             .iter()

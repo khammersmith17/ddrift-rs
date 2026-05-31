@@ -13,6 +13,35 @@ use ahash::{HashMap, HashMapExt};
 use arrow::{array::Array, datatypes::DataType, record_batch::RecordBatch};
 use std::sync::Arc;
 
+fn candidate_arrow_array_string_dispatch<'a>(
+    array: Arc<dyn Array>,
+    bin_edges: &'a crate::core::bin_edges::CategoricalBinEdges<String>,
+) -> Result<NullableCategoricalCandidateView<'a, String>, crate::core::error::DriftError> {
+    use super::slice_impl::{StringSlice32, StringSlice64};
+
+    // Match on inner string type to determine concrete slice type.
+    // Dispatch follows the same route given either slice dispatch.
+    match array.data_type() {
+        DataType::Utf8 | DataType::Dictionary(_, _) => {
+            let typed = array
+                .as_any()
+                .downcast_ref::<arrow::array::StringArray>()
+                .unwrap();
+            let slice = StringSlice32::from_array(typed);
+            NullableCategoricalCandidateView::from_string_slice(&slice, bin_edges)
+        }
+        DataType::LargeUtf8 => {
+            let typed = array
+                .as_any()
+                .downcast_ref::<arrow::array::LargeStringArray>()
+                .unwrap();
+            let slice = StringSlice64::from_array(typed);
+            NullableCategoricalCandidateView::from_string_slice(&slice, bin_edges)
+        }
+        _ => unreachable!(),
+    }
+}
+
 /* TODO:
 * implement a candidate dataset view, that can take the bin edges from the baseline by reference.
 * This binds the candidate dataset to the lifetime of the baseline, OK here.
@@ -186,10 +215,20 @@ impl<'a> ArrowCandidateColumn<'a> {
                 ArrowCandidateContainer::UnsignedInteger64(inner)
             }
             ArrowBaselineContainer::String(bl_bins) => {
-                todo!()
+                let &NullableBaselineCategoricalBins { ref bin_edges, .. } = bl_bins;
+                let inner = candidate_arrow_array_string_dispatch(array.clone(), bin_edges)?;
+                ArrowCandidateContainer::String(inner)
             }
             ArrowBaselineContainer::Boolean(bl_bins) => {
-                todo!()
+                use super::slice_impl::BooleanSlice;
+                let &NullableBaselineCategoricalBins { ref bin_edges, .. } = bl_bins;
+                let typed_array = array
+                    .as_any()
+                    .downcast_ref::<arrow::array::BooleanArray>()
+                    .unwrap();
+                let slice = BooleanSlice::from_array(&typed_array);
+                let inner = NullableCategoricalCandidateView::from_bool_slice(&slice, bin_edges)?;
+                ArrowCandidateContainer::Boolean(inner)
             }
         };
         Ok(ArrowCandidateColumn {

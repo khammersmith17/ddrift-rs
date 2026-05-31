@@ -313,6 +313,55 @@ pub mod candidate {
         }
     }
 
+    #[cfg(feature = "arrow")]
+    impl<'a> NullableCategoricalCandidateView<'a, String> {
+        pub fn from_string_slice<
+            'slice,
+            S: crate::ddrift_arrow::slice_impl::SliceImpl<&'slice str> + Send + Sync,
+        >(
+            slice: &S,
+            bin_edges: &'a CategoricalBinEdges<String>,
+        ) -> Result<NullableCategoricalCandidateView<'a, String>, DriftError> {
+            if slice.is_empty() {
+                return Err(DriftError::EmptyRuntimeData);
+            }
+
+            let size = slice.len();
+            let (quantile_bins, null_count) =
+                crate::core::ddrift_arrow::compute_bins_arrow_string_slice(slice, bin_edges);
+            Ok(NullableCategoricalCandidateView {
+                bin_edges,
+                quantile_bins,
+                size,
+                null_count: null_count as usize,
+            })
+        }
+    }
+
+    #[cfg(feature = "arrow")]
+    impl<'a> NullableCategoricalCandidateView<'a, bool> {
+        pub fn from_bool_slice<
+            S: crate::ddrift_arrow::slice_impl::SliceImpl<bool> + Send + Sync,
+        >(
+            slice: &S,
+            bin_edges: &'a CategoricalBinEdges<bool>,
+        ) -> Result<NullableCategoricalCandidateView<'a, bool>, DriftError> {
+            if slice.is_empty() {
+                return Err(DriftError::EmptyRuntimeData);
+            }
+
+            let size = slice.len();
+            let (quantile_bins, null_count) =
+                crate::core::ddrift_arrow::compute_bins_arrow_bool_slice(slice, bin_edges);
+            Ok(NullableCategoricalCandidateView {
+                bin_edges,
+                quantile_bins,
+                size,
+                null_count: null_count as usize,
+            })
+        }
+    }
+
     impl<'a, T: Hash + Ord + Clone> NullableCategoricalCandidateView<'a, T> {
         pub fn from_bin_edges(
             dataset: &[Option<T>],

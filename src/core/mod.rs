@@ -38,7 +38,7 @@ pub(crate) fn compute_nullable_dataset_from_bins_continuous<T: Float + Send + Sy
     }
 }
 
-fn compute_dataset_from_bins_continuous_seq<T: Float>(
+pub(crate) fn compute_dataset_from_bins_continuous_seq<T: Float>(
     dataset: &[T],
     edges: &ContinuousBinEdges<T>,
 ) -> Vec<f64> {
@@ -64,7 +64,7 @@ pub(crate) fn compute_dataset_from_bins_categorical_parallel<
     }
 }
 
-fn compute_nullable_dataset_from_bins_continuous_seq<T: Float>(
+pub(crate) fn compute_nullable_dataset_from_bins_continuous_seq<T: Float>(
     dataset: &[Option<T>],
     edges: &ContinuousBinEdges<T>,
 ) -> (Vec<f64>, f64) {
@@ -122,6 +122,71 @@ pub(crate) fn compute_dataset_from_bins_categorical<'a, T: Hash + Ord + Clone>(
     hist
 }
 
+#[cfg(feature = "arrow")]
+pub(crate) mod arrow_string {
+    use super::BTreeMap;
+    use super::DriftError;
+    use ahash::{HashMap, HashMapExt};
+
+    pub(crate) fn arrow_string_derive_baseline<'a, T: arrow::array::StringArrayType<'a>>(
+        array: &T,
+    ) -> Result<(HashMap<String, usize>, Vec<f64>, usize), DriftError> {
+        let mut null_count = 0_usize;
+        let mut initial_bins: BTreeMap<String, usize> = BTreeMap::new();
+        for example in array.iter() {
+            let Some(ex) = example else {
+                null_count += 1;
+                continue;
+            };
+
+            if let Some(ex_count) = initial_bins.get_mut(ex) {
+                *ex_count += 1;
+            } else {
+                initial_bins.insert(ex.to_string(), 1_usize);
+            }
+        }
+
+        // Preallocate space for cardinatity of the dataset + 1
+        // The additional bin is reserved for data values not observed in the baseline dataset
+        let mut baseline_bins = vec![0_f64; initial_bins.len() + 1_usize];
+        let mut idx_map: HashMap<String, usize> = HashMap::with_capacity(initial_bins.len());
+
+        for (i, (key, count)) in initial_bins.into_iter().enumerate() {
+            idx_map.insert(key, i);
+            baseline_bins[i] = count as f64;
+        }
+        Ok((idx_map, baseline_bins, null_count))
+    }
+
+    pub(crate) fn arrow_bool_derive_baseline(
+        array: &arrow::array::BooleanArray,
+    ) -> Result<(HashMap<bool, usize>, Vec<f64>, usize), DriftError> {
+        let mut false_count = 0_f64;
+        let mut true_count = 0_f64;
+        let mut null_count = 0_usize;
+
+        for example in array.iter() {
+            let Some(ex) = example else {
+                null_count += 1;
+                continue;
+            };
+
+            true_count += (ex as usize) as f64;
+            false_count += (!ex as usize) as f64;
+        }
+
+        let mut idx_map: HashMap<bool, usize> = HashMap::with_capacity(2);
+        idx_map.insert(false, 0_usize);
+        idx_map.insert(true, 1_usize);
+
+        let mut bins = vec![0_f64; 3_usize];
+        bins[0] = false_count;
+        bins[1] = true_count;
+
+        Ok((idx_map, bins, null_count as usize))
+    }
+}
+
 /// Defines the lookup map for nullable categorical fields, and constructs the baseline histogram for drift
 /// at "runtime".
 pub(crate) fn nullable_categorical_derive_baseline_state<T: Hash + Ord + Clone>(
@@ -131,7 +196,6 @@ pub(crate) fn nullable_categorical_derive_baseline_state<T: Hash + Ord + Clone>(
         return Err(DriftError::EmptyBaselineData);
     }
 
-    let total_n = baseline_dataset.len() as f64;
     let mut null_n = 0_usize;
 
     let mut initial_bins: BTreeMap<T, f64> = BTreeMap::new();
@@ -153,11 +217,9 @@ pub(crate) fn nullable_categorical_derive_baseline_state<T: Hash + Ord + Clone>(
     let mut baseline_bins = vec![0_f64; initial_bins.len() + 1_usize];
     let mut idx_map: HashMap<T, usize> = HashMap::with_capacity(initial_bins.len());
 
-    let nonnull_n = total_n - null_n as f64;
-
     for (i, (key, count)) in initial_bins.into_iter().enumerate() {
         idx_map.insert(key, i);
-        baseline_bins[i] = count / nonnull_n;
+        baseline_bins[i] = count;
     }
     Ok((idx_map, baseline_bins, null_n))
 }

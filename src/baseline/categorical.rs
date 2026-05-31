@@ -178,6 +178,43 @@ pub struct NullableBaselineCategoricalBins<T: Hash + Ord + Clone> {
     pub(crate) null_samples: f64,
 }
 
+#[cfg(feature = "arrow")]
+impl NullableBaselineCategoricalBins<String> {
+    pub(crate) fn from_string_array<'a, T: arrow::array::StringArrayType<'a>>(
+        array: &T,
+    ) -> Result<NullableBaselineCategoricalBins<String>, DriftError> {
+        let total_samples = array.len();
+        let (idx_map, baseline_bins, null_samples) =
+            crate::core::arrow_string::arrow_string_derive_baseline(array)?;
+
+        let bin_edges = CategoricalBinEdges::new(idx_map);
+
+        Ok(NullableBaselineCategoricalBins {
+            bin_edges,
+            baseline_bins,
+            total_samples: total_samples as f64,
+            null_samples: null_samples as f64,
+        })
+    }
+
+    pub(crate) fn from_boolean_array(
+        array: &arrow::array::BooleanArray,
+    ) -> Result<NullableBaselineCategoricalBins<bool>, DriftError> {
+        let total_samples = array.len();
+        let (idx_map, baseline_bins, null_samples) =
+            crate::core::arrow_string::arrow_bool_derive_baseline(array)?;
+
+        let bin_edges = CategoricalBinEdges::new(idx_map);
+
+        Ok(NullableBaselineCategoricalBins {
+            bin_edges,
+            baseline_bins,
+            total_samples: total_samples as f64,
+            null_samples: null_samples as f64,
+        })
+    }
+}
+
 impl<T: Hash + Ord + Clone> NullableBaselineCategoricalBins<T> {
     pub(crate) fn new(
         baseline_data: &[Option<T>],

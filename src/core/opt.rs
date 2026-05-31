@@ -5,14 +5,100 @@ use crate::constants::get_thread_count;
 * Methods to approximate the distribution histogram across threads.
 * Derive an approximate number of threads.
 * Compute thread local distribution.
-* Reduce local element wise count into global bins by folding the local bins.
+* Reduce local element wise count into global bins by folding the local bins and null_count when
+* relevant.
 */
 
 #[cfg(feature = "arrow")]
 pub(crate) mod arrow_opt {
+    use crate::ddrift_arrow::slice_impl::SliceImpl;
     use arrow::buffer::NullBuffer;
     use num_traits::Float;
     use std::hash::Hash;
+
+    pub(crate) fn parallel_approx_string_slice<'a, S: SliceImpl<&'a str> + Send + Sync>(
+        slice: &S,
+        bin_edges: &super::CategoricalBinEdges<String>,
+        thread_count: usize,
+    ) -> (Vec<f64>, f64) {
+        let n_bins = bin_edges.n_bins();
+
+        std::thread::scope(|s| {
+            slice
+                .chunk_indexes(thread_count)
+                .map(|index_range| {
+                    s.spawn(|| {
+                        let mut null_count = 0_f64;
+                        let mut hist = vec![0_f64; n_bins];
+
+                        for idx in index_range {
+                            if let Some(item) = slice.get(idx) {
+                                hist[bin_edges.resolve_bin(item)] += 1_f64;
+                            } else {
+                                null_count += 1_f64;
+                            }
+                        }
+                        (hist, null_count)
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|t| t.join().unwrap())
+                .fold(
+                    (vec![0_f64; n_bins], 0_f64),
+                    |(mut acc_hist, mut acc_null_count), (local_hist, local_null_count)| {
+                        acc_null_count += local_null_count;
+                        acc_hist
+                            .iter_mut()
+                            .zip(local_hist.iter())
+                            .for_each(|(a, b)| *a += b);
+                        (acc_hist, acc_null_count)
+                    },
+                )
+        })
+    }
+
+    pub(crate) fn parallel_approx_boolean_slice<'a, S: SliceImpl<bool> + Send + Sync>(
+        slice: &S,
+        bin_edges: &super::CategoricalBinEdges<bool>,
+        thread_count: usize,
+    ) -> (Vec<f64>, f64) {
+        let n_bins = bin_edges.n_bins();
+
+        std::thread::scope(|s| {
+            slice
+                .chunk_indexes(thread_count)
+                .map(|index_range| {
+                    s.spawn(|| {
+                        let mut null_count = 0_f64;
+                        let mut hist = vec![0_f64; n_bins];
+
+                        for idx in index_range {
+                            if let Some(item) = slice.get(idx) {
+                                hist[bin_edges.resolve_bin(&item)] += 1_f64;
+                            } else {
+                                null_count += 1_f64;
+                            }
+                        }
+                        (hist, null_count)
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|t| t.join().unwrap())
+                .fold(
+                    (vec![0_f64; n_bins], 0_f64),
+                    |(mut acc_hist, mut acc_null_count), (local_hist, local_null_count)| {
+                        acc_null_count += local_null_count;
+                        acc_hist
+                            .iter_mut()
+                            .zip(local_hist.iter())
+                            .for_each(|(a, b)| *a += b);
+                        (acc_hist, acc_null_count)
+                    },
+                )
+        })
+    }
 
     pub(crate) fn parallel_approx_arrow_cont<T: Float + Send + Sync>(
         dataset: &[T],

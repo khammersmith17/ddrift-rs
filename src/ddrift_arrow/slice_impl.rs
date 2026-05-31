@@ -1,43 +1,10 @@
 use std::ops::Range;
 use std::vec::IntoIter;
 
-/// Type to implement an alternative string view that allows for parallel chunking.
-pub(crate) struct StringSlice32<'a> {
-    buffer: &'a [u8],
-    offsets: &'a [i32],
-}
-
-impl<'a> StringSlice32<'a> {
-    pub(crate) fn from_array(array: &'a arrow::array::StringArray) -> StringSlice32<'a> {
-        let buffer = array.values().as_slice();
-        let offsets = array.value_offsets();
-        StringSlice32 { buffer, offsets }
-    }
-
-    fn offset_len(&self) -> usize {
-        self.offsets.len()
-    }
-
-    fn len(&self) -> usize {
-        self.offset_len() - 1_usize
-    }
-
-    pub(crate) fn get(&self, i: usize) -> Option<&str> {
-        let offset_len = self.offset_len();
-        if i + 1 >= offset_len {
-            return None;
-        }
-
-        let start = self.offsets[i] as usize;
-        let end = self.offsets[i + 1] as usize;
-
-        // SAFETY: Safety comes from upstream arrow implementation.
-        // Only constructed from safe utf8 representation.
-        return Some(unsafe { std::str::from_utf8_unchecked(&self.buffer[start..end]) });
-    }
-
-    /// Returns up to num_chunks chunks. The last chunk will be the remaining indexes.
-    pub(crate) fn chunk_indexes(&self, mut num_chunks: usize) -> IntoIter<Range<usize>> {
+pub trait SliceImpl<T> {
+    fn get(&self, i: usize) -> Option<T>;
+    fn len(&self) -> usize;
+    fn chunk_indexes(&self, mut num_chunks: usize) -> IntoIter<Range<usize>> {
         num_chunks = num_chunks.min(self.len());
         let mut range_chunks: Vec<Range<usize>> = Vec::with_capacity(num_chunks);
         let mut start = 0_usize;
@@ -52,9 +19,52 @@ impl<'a> StringSlice32<'a> {
         }
         range_chunks.into_iter()
     }
+    fn index_range(&self) -> Range<usize> {
+        0..self.len()
+    }
+    fn is_empty(&self) -> bool {
+        self.len() == 0_usize
+    }
 }
 
-pub(crate) struct BooleanSlice<'a> {
+/// Type to implement an alternative string view that allows for parallel chunking.
+pub struct StringSlice32<'a> {
+    buffer: &'a [u8],
+    offsets: &'a [i32],
+}
+
+impl<'a> StringSlice32<'a> {
+    pub(crate) fn from_array(array: &'a arrow::array::StringArray) -> StringSlice32<'a> {
+        let buffer = array.values().as_slice();
+        let offsets = array.value_offsets();
+        StringSlice32 { buffer, offsets }
+    }
+
+    fn offset_len(&self) -> usize {
+        self.offsets.len()
+    }
+}
+
+impl<'a> SliceImpl<&'a str> for StringSlice32<'a> {
+    fn len(&self) -> usize {
+        self.offset_len() - 1_usize
+    }
+    fn get(&self, i: usize) -> Option<&'a str> {
+        let offset_len = self.offset_len();
+        if i + 1 >= offset_len {
+            return None;
+        }
+
+        let start = self.offsets[i] as usize;
+        let end = self.offsets[i + 1] as usize;
+
+        // SAFETY: Safety comes from upstream arrow implementation.
+        // Only constructed from safe utf8 representation.
+        return Some(unsafe { std::str::from_utf8_unchecked(&self.buffer[start..end]) });
+    }
+}
+
+pub struct BooleanSlice<'a> {
     buffer: &'a arrow::buffer::BooleanBuffer,
 }
 
@@ -64,37 +74,23 @@ impl<'a> BooleanSlice<'a> {
             buffer: array.values(),
         }
     }
+}
 
-    pub(crate) fn len(&self) -> usize {
+impl<'a> SliceImpl<bool> for BooleanSlice<'a> {
+    fn len(&self) -> usize {
         self.buffer.len()
     }
 
-    pub(crate) fn get(&self, i: usize) -> Option<bool> {
+    fn get(&self, i: usize) -> Option<bool> {
         if i >= self.buffer.len() {
             return None;
         }
         // SAFETY: bounds checked above, buffer.value handles bit offset internally.
         Some(self.buffer.value(i))
     }
-
-    /// Returns up to num_chunks chunks. The last chunk will be the remaining indexes.
-    pub(crate) fn chunk_indexes(&self, num_chunks: usize) -> IntoIter<Range<usize>> {
-        let mut range_chunks: Vec<Range<usize>> = Vec::with_capacity(num_chunks);
-        let mut start = 0_usize;
-        let len = self.len();
-        let step = (len as f64 / num_chunks as f64).ceil() as usize;
-        for _ in 0..num_chunks {
-            if start > len {
-                break;
-            }
-            range_chunks.push(start..(start + step).min(len));
-            start += step;
-        }
-        range_chunks.into_iter()
-    }
 }
 
-pub(crate) struct StringSlice64<'a> {
+pub struct StringSlice64<'a> {
     buffer: &'a [u8],
     offsets: &'a [i64],
 }
@@ -109,12 +105,13 @@ impl<'a> StringSlice64<'a> {
     fn offset_len(&self) -> usize {
         self.offsets.len()
     }
+}
 
+impl<'a> SliceImpl<&'a str> for StringSlice64<'a> {
     fn len(&self) -> usize {
         self.offset_len() - 1
     }
-
-    pub(crate) fn get(&self, i: usize) -> Option<&str> {
+    fn get(&self, i: usize) -> Option<&'a str> {
         let offset_len = self.offset_len();
         if i + 1 >= offset_len {
             return None;
@@ -126,22 +123,6 @@ impl<'a> StringSlice64<'a> {
         // SAFETY: Safety comes from upstream arrow implementation.
         // Only constructed from safe utf8 representation.
         return Some(unsafe { std::str::from_utf8_unchecked(&self.buffer[start..end]) });
-    }
-
-    /// Returns up to num_chunks chunks. The last chunk will be the remaining indexes.
-    pub(crate) fn chunk_indexes(&self, num_chunks: usize) -> IntoIter<Range<usize>> {
-        let mut range_chunks: Vec<Range<usize>> = Vec::with_capacity(num_chunks);
-        let mut start = 0_usize;
-        let len = self.len();
-        let step = (len as f64 / num_chunks as f64).ceil() as usize;
-        for _ in 0..num_chunks {
-            if start > len {
-                break;
-            }
-            range_chunks.push(start..(start + step).min(len));
-            start += step;
-        }
-        range_chunks.into_iter()
     }
 }
 
