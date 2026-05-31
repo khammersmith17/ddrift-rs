@@ -106,8 +106,8 @@ mod tests {
         let result =
             compute_drift_continuous_distribution(&baseline, &candidate, &metrics, None).unwrap();
 
-        assert_eq!(result.len(), 1);
-        assert!(result[0].drift_magnitude.abs() < 1e-9);
+        assert_eq!(result.drift.len(), 1);
+        assert!(result.drift[0].drift_magnitude.abs() < 1e-9);
     }
 
     #[test]
@@ -119,8 +119,8 @@ mod tests {
         let result =
             compute_drift_continuous_distribution(&baseline, &candidate, &metrics, None).unwrap();
 
-        assert_eq!(result.len(), 1);
-        assert!(result[0].drift_magnitude > 0.5);
+        assert_eq!(result.drift.len(), 1);
+        assert!(result.drift[0].drift_magnitude > 0.5);
     }
 
     #[test]
@@ -137,8 +137,8 @@ mod tests {
         let result =
             compute_drift_continuous_distribution(&baseline, &candidate, &metrics, None).unwrap();
 
-        assert_eq!(result.len(), 4);
-        for score in &result {
+        assert_eq!(result.drift.len(), 4);
+        for score in &result.drift {
             assert!(score.drift_magnitude.abs() < 1e-9);
         }
     }
@@ -157,8 +157,8 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(result.len(), 1);
-        assert!(result[0].drift_magnitude.abs() < 1e-9);
+        assert_eq!(result.drift.len(), 1);
+        assert!(result.drift[0].drift_magnitude.abs() < 1e-9);
     }
 
     #[test]
@@ -183,8 +183,8 @@ mod tests {
         let result =
             compute_drift_categorical_distribution(&baseline, &candidate, &metrics).unwrap();
 
-        assert_eq!(result.len(), 1);
-        assert!(result[0].drift_magnitude.abs() < 1e-9);
+        assert_eq!(result.drift.len(), 1);
+        assert!(result.drift[0].drift_magnitude.abs() < 1e-9);
     }
 
     #[test]
@@ -196,8 +196,8 @@ mod tests {
         let result =
             compute_drift_categorical_distribution(&baseline, &candidate, &metrics).unwrap();
 
-        assert_eq!(result.len(), 1);
-        assert!(result[0].drift_magnitude > 0.1);
+        assert_eq!(result.drift.len(), 1);
+        assert!(result.drift[0].drift_magnitude > 0.1);
     }
 
     #[test]
@@ -214,8 +214,8 @@ mod tests {
         let result =
             compute_drift_categorical_distribution(&baseline, &candidate, &metrics).unwrap();
 
-        assert_eq!(result.len(), 4);
-        for score in &result {
+        assert_eq!(result.drift.len(), 4);
+        for score in &result.drift {
             assert!(score.drift_magnitude.abs() < 1e-9);
         }
     }
@@ -230,8 +230,8 @@ mod tests {
         let result =
             compute_drift_categorical_distribution(&baseline, &candidate, &metrics).unwrap();
 
-        assert_eq!(result.len(), 1);
-        assert!(result[0].drift_magnitude >= 0.0);
+        assert_eq!(result.drift.len(), 1);
+        assert!(result.drift[0].drift_magnitude >= 0.0);
     }
 
     #[test]
@@ -245,8 +245,8 @@ mod tests {
 
         dbg!(&result);
 
-        assert_eq!(result.len(), 1);
-        assert!(result[0].drift_magnitude.abs() < 1e-9);
+        assert_eq!(result.drift.len(), 1);
+        assert!(result.drift[0].drift_magnitude.abs() < 1e-9);
     }
 
     #[test]
