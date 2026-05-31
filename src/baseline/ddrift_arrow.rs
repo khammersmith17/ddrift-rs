@@ -1,7 +1,7 @@
 use super::{
     categorical::NullableBaselineCategoricalBins, continuous::NullableBaselineContinuousBins,
 };
-use crate::core::distribution::QuantileType;
+use crate::core::{distribution::QuantileType, error::DriftArrowError};
 use ahash::{HashMap, HashMapExt};
 use arrow::{
     array::{self, Array},
@@ -37,7 +37,7 @@ impl ArrowBaselineColumn {
     pub fn from_array(
         array: Arc<dyn Array>,
         quantile_type: Option<QuantileType>,
-    ) -> Result<ArrowBaselineColumn, Box<dyn std::error::Error>> {
+    ) -> Result<ArrowBaselineColumn, DriftArrowError> {
         let arrow_type = array.data_type().clone();
         let container = match &arrow_type {
             DataType::Float32 => {
@@ -143,8 +143,8 @@ impl ArrowBaselineColumn {
                     NullableBaselineCategoricalBins::from_boolean_array(&typed_array)?;
                 ArrowBaselineContainer::Boolean(baseline_bins)
             }
-            other => {
-                return Err(format!("unsupported Arrow type for drift baseline: {other}").into());
+            _ => {
+                return Err(DriftArrowError::UnsupportedArrowTypeError(arrow_type));
             }
         };
         Ok(ArrowBaselineColumn {
@@ -162,7 +162,7 @@ impl ArrowBaselineTable {
     pub fn from_record_batch(
         batch: &RecordBatch,
         quantile_types_opt: Option<&HashMap<String, QuantileType>>,
-    ) -> Result<ArrowBaselineTable, Box<dyn std::error::Error>> {
+    ) -> Result<ArrowBaselineTable, DriftArrowError> {
         // Have an owned map to reference when the user does not provide.
         let fallback_map = HashMap::new();
         let quantile_types = quantile_types_opt.unwrap_or(&fallback_map);

@@ -1,5 +1,36 @@
 use thiserror::Error;
 
+#[cfg(feature = "arrow")]
+use arrow::error::ArrowError;
+
+#[cfg(feature = "arrow")]
+#[non_exhaustive]
+#[derive(Debug, Error)]
+pub enum DriftArrowError {
+    #[error("Schema error: {0:?}")]
+    SchemaError(crate::ddrift_arrow::schema_view::InvalidSchemaReport),
+    #[error("Unsupported Arrow DataType: {0:?}")]
+    UnsupportedArrowTypeError(arrow::datatypes::DataType),
+    #[error("Drift Error: {0:?}")]
+    DriftError(DriftError),
+    #[error("Arrow Error: {0:?}")]
+    ArrowError(ArrowError),
+}
+
+#[cfg(feature = "arrow")]
+impl From<DriftError> for DriftArrowError {
+    fn from(err: DriftError) -> DriftArrowError {
+        DriftArrowError::DriftError(err)
+    }
+}
+
+#[cfg(feature = "arrow")]
+impl From<ArrowError> for DriftArrowError {
+    fn from(err: ArrowError) -> DriftArrowError {
+        DriftArrowError::ArrowError(err)
+    }
+}
+
 #[non_exhaustive]
 #[derive(Debug, Error)]
 pub enum DriftError {

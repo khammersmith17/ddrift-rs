@@ -9,6 +9,7 @@ pub(crate) fn validate_schema(
     baseline_schema.validate(candidate_schema)
 }
 
+#[derive(Debug)]
 pub struct InvalidSchemaReport {
     pub invalid_type_columns: Vec<String>,
     pub missing_baseline_columns: Vec<String>,
@@ -20,8 +21,8 @@ pub(crate) enum SchemaValidationResult {
     Invalid(InvalidSchemaReport),
 }
 
-/// Lightweight schema representation of a `[crate::arrow::candidate::ArrowCandidateTable]` or
-/// [crate::baseline::arrow::ArrowBaselineTable]` t
+/// Lightweight schema representation of a `[crate::ddrift_arrow::candidate::ArrowCandidateTable]` or
+/// `[crate::baseline::ddrift_arrow::ArrowBaselineTable]`
 pub(crate) struct SchemaView {
     schema: HashMap<String, DataType>,
 }

@@ -5,8 +5,11 @@ use crate::{
         continuous::NullableBaselineContinuousBins,
         ddrift_arrow::{ArrowBaselineColumn, ArrowBaselineContainer, ArrowBaselineTable},
     },
-    core::dataset_view::candidate::{
-        NullableCategoricalCandidateView, NullableContinuousCandidateView,
+    core::{
+        dataset_view::candidate::{
+            NullableCategoricalCandidateView, NullableContinuousCandidateView,
+        },
+        error::DriftArrowError,
     },
 };
 use ahash::{HashMap, HashMapExt};
@@ -74,7 +77,7 @@ impl<'a> ArrowCandidateColumn<'a> {
     pub(super) fn from_baseline_and_array(
         baseline: &'a ArrowBaselineColumn,
         array: Arc<dyn Array>,
-    ) -> Result<ArrowCandidateColumn<'a>, Box<dyn std::error::Error>> {
+    ) -> Result<ArrowCandidateColumn<'a>, DriftArrowError> {
         let &ArrowBaselineColumn {
             arrow_type: ref baseline_arrow_type,
             container: ref baseline_container,
@@ -254,19 +257,13 @@ impl<'a> ArrowCandidateTable<'a> {
     pub fn from_record_batch(
         baseline_table: &'a ArrowBaselineTable,
         record_batch: Arc<RecordBatch>,
-    ) -> Result<ArrowCandidateTable<'a>, Box<dyn std::error::Error>> {
+    ) -> Result<ArrowCandidateTable<'a>, DriftArrowError> {
         let bl_schema = SchemaView::from_baseline_table(baseline_table);
         let candidate_schema = SchemaView::from_record_batch(&record_batch);
         if let SchemaValidationResult::Invalid(diff) =
             validate_schema(&bl_schema, &candidate_schema)
         {
-            return Err(format!(
-                "schema mismatch — missing: {:?}, type errors: {:?}, extra: {:?}",
-                diff.missing_baseline_columns,
-                diff.invalid_type_columns,
-                diff.extra_candidate_columns,
-            )
-            .into());
+            return Err(DriftArrowError::SchemaError(diff));
         }
 
         let mut table = HashMap::with_capacity(baseline_table.table.len());
