@@ -11,7 +11,7 @@ use crate::constants::get_thread_count;
 
 #[cfg(feature = "arrow")]
 pub(crate) mod arrow_opt {
-    use crate::ddrift_arrow::slice_impl::SliceImpl;
+    use crate::table::slice_impl::SliceImpl;
     use arrow::buffer::NullBuffer;
     use num_traits::Float;
     use std::hash::Hash;

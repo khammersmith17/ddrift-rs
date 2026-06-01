@@ -317,7 +317,7 @@ pub mod candidate {
     impl<'a> NullableCategoricalCandidateView<'a, String> {
         pub fn from_string_slice<
             'slice,
-            S: crate::ddrift_arrow::slice_impl::SliceImpl<&'slice str> + Send + Sync,
+            S: crate::table::slice_impl::SliceImpl<&'slice str> + Send + Sync,
         >(
             slice: &S,
             bin_edges: &'a CategoricalBinEdges<String>,
@@ -340,9 +340,7 @@ pub mod candidate {
 
     #[cfg(feature = "arrow")]
     impl<'a> NullableCategoricalCandidateView<'a, bool> {
-        pub fn from_bool_slice<
-            S: crate::ddrift_arrow::slice_impl::SliceImpl<bool> + Send + Sync,
-        >(
+        pub fn from_bool_slice<S: crate::table::slice_impl::SliceImpl<bool> + Send + Sync>(
             slice: &S,
             bin_edges: &'a CategoricalBinEdges<bool>,
         ) -> Result<NullableCategoricalCandidateView<'a, bool>, DriftError> {

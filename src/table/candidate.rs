@@ -1,9 +1,12 @@
-use super::schema_view::{SchemaValidationResult, SchemaView, validate_schema};
+use super::{
+    datatypes::DriftDataType,
+    schema_view::{SchemaValidationResult, SchemaView, validate_schema},
+};
 use crate::{
     baseline::{
         categorical::NullableBaselineCategoricalBins,
         continuous::NullableBaselineContinuousBins,
-        ddrift_arrow::{ArrowBaselineColumn, ArrowBaselineContainer, ArrowBaselineTable},
+        table::{BaselineColumn, BaselineContainer, BaselineTable},
     },
     core::{
         dataset_view::candidate::{
@@ -13,11 +16,15 @@ use crate::{
     },
 };
 use ahash::{HashMap, HashMapExt};
-use arrow::{array::Array, datatypes::DataType, record_batch::RecordBatch};
+use arrow::{
+    array::{Array, ArrayRef},
+    datatypes::DataType,
+    record_batch::RecordBatch,
+};
 use std::sync::Arc;
 
 fn candidate_arrow_array_string_dispatch<'a>(
-    array: Arc<dyn Array>,
+    array: ArrayRef,
     bin_edges: &'a crate::core::bin_edges::CategoricalBinEdges<String>,
 ) -> Result<NullableCategoricalCandidateView<'a, String>, crate::core::error::DriftError> {
     use super::slice_impl::{StringSlice32, StringSlice64};
@@ -41,18 +48,12 @@ fn candidate_arrow_array_string_dispatch<'a>(
             let slice = StringSlice64::from_array(typed);
             NullableCategoricalCandidateView::from_string_slice(&slice, bin_edges)
         }
+        // Guaranteed to be one of these types at this point.
         _ => unreachable!(),
     }
 }
 
-/* TODO:
-* implement a candidate dataset view, that can take the bin edges from the baseline by reference.
-* This binds the candidate dataset to the lifetime of the baseline, OK here.
-*
-* If a user wants a concrete representation of the runtime dataset, they can get that too.
-* */
-
-pub enum ArrowCandidateContainer<'a> {
+pub enum CandidateContainer<'a> {
     FloatingPoint32(NullableContinuousCandidateView<'a, f32>),
     FloatingPoint64(NullableContinuousCandidateView<'a, f64>),
     Integer64(NullableCategoricalCandidateView<'a, i64>),
@@ -67,27 +68,27 @@ pub enum ArrowCandidateContainer<'a> {
     Boolean(NullableCategoricalCandidateView<'a, bool>),
 }
 
-pub struct ArrowCandidateColumn<'a> {
-    pub arrow_type: DataType,
-    pub container: ArrowCandidateContainer<'a>,
+pub struct CandidateColumn<'a> {
+    pub datatype: DriftDataType,
+    pub container: CandidateContainer<'a>,
 }
 
-impl<'a> ArrowCandidateColumn<'a> {
+impl<'a> CandidateColumn<'a> {
     // Caller must guarantee schema parity between baseline and array before calling this.
     pub(super) fn from_baseline_and_array(
-        baseline: &'a ArrowBaselineColumn,
-        array: Arc<dyn Array>,
-    ) -> Result<ArrowCandidateColumn<'a>, DriftArrowError> {
-        let &ArrowBaselineColumn {
-            arrow_type: ref baseline_arrow_type,
+        baseline: &'a BaselineColumn,
+        array: ArrayRef,
+    ) -> Result<CandidateColumn<'a>, DriftArrowError> {
+        let &BaselineColumn {
+            datatype: ref baseline_type,
             container: ref baseline_container,
         } = baseline;
 
-        let candidate_arrow_type = array.data_type();
-        debug_assert_eq!(baseline_arrow_type, candidate_arrow_type);
+        let candidate_type = array.data_type().into();
+        debug_assert_eq!(baseline_type, &candidate_type);
 
         let container = match baseline_container {
-            ArrowBaselineContainer::FloatingPoint32(bl_bins) => {
+            BaselineContainer::FloatingPoint32(bl_bins) => {
                 let &NullableBaselineContinuousBins { ref bin_edges, .. } = bl_bins;
                 let typed_array = array
                     .as_any()
@@ -98,9 +99,9 @@ impl<'a> ArrowCandidateColumn<'a> {
                     bin_edges,
                     typed_array.nulls(),
                 )?;
-                ArrowCandidateContainer::FloatingPoint32(inner)
+                CandidateContainer::FloatingPoint32(inner)
             }
-            ArrowBaselineContainer::FloatingPoint64(bl_bins) => {
+            BaselineContainer::FloatingPoint64(bl_bins) => {
                 let &NullableBaselineContinuousBins { ref bin_edges, .. } = bl_bins;
                 let typed_array = array
                     .as_any()
@@ -111,9 +112,9 @@ impl<'a> ArrowCandidateColumn<'a> {
                     bin_edges,
                     typed_array.nulls(),
                 )?;
-                ArrowCandidateContainer::FloatingPoint64(inner)
+                CandidateContainer::FloatingPoint64(inner)
             }
-            ArrowBaselineContainer::Integer8(bl_bins) => {
+            BaselineContainer::Integer8(bl_bins) => {
                 let &NullableBaselineCategoricalBins { ref bin_edges, .. } = bl_bins;
                 let typed_array = array
                     .as_any()
@@ -124,9 +125,9 @@ impl<'a> ArrowCandidateColumn<'a> {
                     bin_edges,
                     typed_array.nulls(),
                 )?;
-                ArrowCandidateContainer::Integer8(inner)
+                CandidateContainer::Integer8(inner)
             }
-            ArrowBaselineContainer::Integer16(bl_bins) => {
+            BaselineContainer::Integer16(bl_bins) => {
                 let &NullableBaselineCategoricalBins { ref bin_edges, .. } = bl_bins;
                 let typed_array = array
                     .as_any()
@@ -137,9 +138,9 @@ impl<'a> ArrowCandidateColumn<'a> {
                     bin_edges,
                     typed_array.nulls(),
                 )?;
-                ArrowCandidateContainer::Integer16(inner)
+                CandidateContainer::Integer16(inner)
             }
-            ArrowBaselineContainer::Integer32(bl_bins) => {
+            BaselineContainer::Integer32(bl_bins) => {
                 let &NullableBaselineCategoricalBins { ref bin_edges, .. } = bl_bins;
                 let typed_array = array
                     .as_any()
@@ -150,9 +151,9 @@ impl<'a> ArrowCandidateColumn<'a> {
                     bin_edges,
                     typed_array.nulls(),
                 )?;
-                ArrowCandidateContainer::Integer32(inner)
+                CandidateContainer::Integer32(inner)
             }
-            ArrowBaselineContainer::Integer64(bl_bins) => {
+            BaselineContainer::Integer64(bl_bins) => {
                 let &NullableBaselineCategoricalBins { ref bin_edges, .. } = bl_bins;
                 let typed_array = array
                     .as_any()
@@ -163,9 +164,9 @@ impl<'a> ArrowCandidateColumn<'a> {
                     bin_edges,
                     typed_array.nulls(),
                 )?;
-                ArrowCandidateContainer::Integer64(inner)
+                CandidateContainer::Integer64(inner)
             }
-            ArrowBaselineContainer::UnsignedInteger8(bl_bins) => {
+            BaselineContainer::UnsignedInteger8(bl_bins) => {
                 let &NullableBaselineCategoricalBins { ref bin_edges, .. } = bl_bins;
                 let typed_array = array
                     .as_any()
@@ -176,9 +177,9 @@ impl<'a> ArrowCandidateColumn<'a> {
                     bin_edges,
                     typed_array.nulls(),
                 )?;
-                ArrowCandidateContainer::UnsignedInteger8(inner)
+                CandidateContainer::UnsignedInteger8(inner)
             }
-            ArrowBaselineContainer::UnsignedInteger16(bl_bins) => {
+            BaselineContainer::UnsignedInteger16(bl_bins) => {
                 let &NullableBaselineCategoricalBins { ref bin_edges, .. } = bl_bins;
                 let typed_array = array
                     .as_any()
@@ -189,9 +190,9 @@ impl<'a> ArrowCandidateColumn<'a> {
                     bin_edges,
                     typed_array.nulls(),
                 )?;
-                ArrowCandidateContainer::UnsignedInteger16(inner)
+                CandidateContainer::UnsignedInteger16(inner)
             }
-            ArrowBaselineContainer::UnsignedInteger32(bl_bins) => {
+            BaselineContainer::UnsignedInteger32(bl_bins) => {
                 let &NullableBaselineCategoricalBins { ref bin_edges, .. } = bl_bins;
                 let typed_array = array
                     .as_any()
@@ -202,9 +203,9 @@ impl<'a> ArrowCandidateColumn<'a> {
                     bin_edges,
                     typed_array.nulls(),
                 )?;
-                ArrowCandidateContainer::UnsignedInteger32(inner)
+                CandidateContainer::UnsignedInteger32(inner)
             }
-            ArrowBaselineContainer::UnsignedInteger64(bl_bins) => {
+            BaselineContainer::UnsignedInteger64(bl_bins) => {
                 let &NullableBaselineCategoricalBins { ref bin_edges, .. } = bl_bins;
                 let typed_array = array
                     .as_any()
@@ -215,14 +216,14 @@ impl<'a> ArrowCandidateColumn<'a> {
                     bin_edges,
                     typed_array.nulls(),
                 )?;
-                ArrowCandidateContainer::UnsignedInteger64(inner)
+                CandidateContainer::UnsignedInteger64(inner)
             }
-            ArrowBaselineContainer::String(bl_bins) => {
+            BaselineContainer::String(bl_bins) => {
                 let &NullableBaselineCategoricalBins { ref bin_edges, .. } = bl_bins;
                 let inner = candidate_arrow_array_string_dispatch(array.clone(), bin_edges)?;
-                ArrowCandidateContainer::String(inner)
+                CandidateContainer::String(inner)
             }
-            ArrowBaselineContainer::Boolean(bl_bins) => {
+            BaselineContainer::Boolean(bl_bins) => {
                 use super::slice_impl::BooleanSlice;
                 let &NullableBaselineCategoricalBins { ref bin_edges, .. } = bl_bins;
                 let typed_array = array
@@ -231,18 +232,18 @@ impl<'a> ArrowCandidateColumn<'a> {
                     .unwrap();
                 let slice = BooleanSlice::from_array(&typed_array);
                 let inner = NullableCategoricalCandidateView::from_bool_slice(&slice, bin_edges)?;
-                ArrowCandidateContainer::Boolean(inner)
+                CandidateContainer::Boolean(inner)
             }
         };
-        Ok(ArrowCandidateColumn {
-            arrow_type: candidate_arrow_type.clone(),
+        Ok(CandidateColumn {
+            datatype: candidate_type,
             container,
         })
     }
 }
 
-pub struct ArrowCandidateTable<'a> {
-    pub table: HashMap<String, ArrowCandidateColumn<'a>>,
+pub struct CandidateTable<'a> {
+    pub table: HashMap<String, CandidateColumn<'a>>,
 }
 
 /*
@@ -253,13 +254,13 @@ pub struct ArrowCandidateTable<'a> {
 *   Third, we know downstream there are no structural error cases.
 * */
 
-impl<'a> ArrowCandidateTable<'a> {
-    pub fn from_record_batch(
-        baseline_table: &'a ArrowBaselineTable,
+impl<'a> CandidateTable<'a> {
+    pub fn from_arrow_record_batch(
+        baseline_table: &'a BaselineTable,
         record_batch: Arc<RecordBatch>,
-    ) -> Result<ArrowCandidateTable<'a>, DriftArrowError> {
+    ) -> Result<CandidateTable<'a>, DriftArrowError> {
         let bl_schema = SchemaView::from_baseline_table(baseline_table);
-        let candidate_schema = SchemaView::from_record_batch(&record_batch);
+        let candidate_schema = SchemaView::from_arrow_record_batch(&record_batch);
         if let SchemaValidationResult::Invalid(diff) =
             validate_schema(&bl_schema, &candidate_schema)
         {
@@ -272,9 +273,9 @@ impl<'a> ArrowCandidateTable<'a> {
             let array = record_batch.column_by_name(name).unwrap().clone();
             table.insert(
                 name.clone(),
-                ArrowCandidateColumn::from_baseline_and_array(baseline_col, array)?,
+                CandidateColumn::from_baseline_and_array(baseline_col, array)?,
             );
         }
-        Ok(ArrowCandidateTable { table })
+        Ok(CandidateTable { table })
     }
 }

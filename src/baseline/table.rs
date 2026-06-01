@@ -1,19 +1,18 @@
 use super::{
     categorical::NullableBaselineCategoricalBins, continuous::NullableBaselineContinuousBins,
 };
-use crate::core::{distribution::QuantileType, error::DriftArrowError};
+use crate::{
+    core::{distribution::QuantileType, error::DriftArrowError},
+    table::datatypes::DriftDataType,
+};
 use ahash::{HashMap, HashMapExt};
 use arrow::{
-    array::{self, Array},
+    array::{self, Array, ArrayRef},
     datatypes::DataType,
     record_batch::RecordBatch,
 };
-use std::sync::Arc;
 
-// TODO: define concrete errors for these cases.
-// Define export and import utilities.
-
-pub enum ArrowBaselineContainer {
+pub enum BaselineContainer {
     FloatingPoint32(NullableBaselineContinuousBins<f32>),
     FloatingPoint64(NullableBaselineContinuousBins<f64>),
     Integer64(NullableBaselineCategoricalBins<i64>),
@@ -28,16 +27,16 @@ pub enum ArrowBaselineContainer {
     Boolean(NullableBaselineCategoricalBins<bool>),
 }
 
-pub struct ArrowBaselineColumn {
-    pub arrow_type: DataType,
-    pub container: ArrowBaselineContainer,
+pub struct BaselineColumn {
+    pub datatype: DriftDataType,
+    pub container: BaselineContainer,
 }
 
-impl ArrowBaselineColumn {
+impl BaselineColumn {
     pub fn from_array(
-        array: Arc<dyn Array>,
+        array: ArrayRef,
         quantile_type: Option<QuantileType>,
-    ) -> Result<ArrowBaselineColumn, DriftArrowError> {
+    ) -> Result<BaselineColumn, DriftArrowError> {
         let arrow_type = array.data_type().clone();
         let container = match &arrow_type {
             DataType::Float32 => {
@@ -47,7 +46,7 @@ impl ArrowBaselineColumn {
                     .unwrap();
                 let inner: NullableBaselineContinuousBins<f32> =
                     NullableBaselineContinuousBins::from_arrow32(&typed_arr, quantile_type);
-                ArrowBaselineContainer::FloatingPoint32(inner)
+                BaselineContainer::FloatingPoint32(inner)
             }
             DataType::Float64 => {
                 let typed_arr = array
@@ -56,62 +55,54 @@ impl ArrowBaselineColumn {
                     .unwrap();
                 let inner: NullableBaselineContinuousBins<f64> =
                     NullableBaselineContinuousBins::from_arrow64(&typed_arr, quantile_type);
-                ArrowBaselineContainer::FloatingPoint64(inner)
+                BaselineContainer::FloatingPoint64(inner)
             }
             DataType::Int8 => {
                 let typed = array.as_any().downcast_ref::<array::Int8Array>().unwrap();
                 let data: Vec<Option<i8>> = typed.iter().collect();
-                ArrowBaselineContainer::Integer8(NullableBaselineCategoricalBins::new(&data)?)
+                BaselineContainer::Integer8(NullableBaselineCategoricalBins::new(&data)?)
             }
             DataType::Int16 => {
                 let typed = array.as_any().downcast_ref::<array::Int16Array>().unwrap();
                 let data: Vec<Option<i16>> = typed.iter().collect();
-                ArrowBaselineContainer::Integer16(NullableBaselineCategoricalBins::new(&data)?)
+                BaselineContainer::Integer16(NullableBaselineCategoricalBins::new(&data)?)
             }
             DataType::Int32 => {
                 let typed = array.as_any().downcast_ref::<array::Int32Array>().unwrap();
                 let data: Vec<Option<i32>> = typed.iter().collect();
-                ArrowBaselineContainer::Integer32(NullableBaselineCategoricalBins::new(&data)?)
+                BaselineContainer::Integer32(NullableBaselineCategoricalBins::new(&data)?)
             }
             DataType::Int64 => {
                 let typed = array.as_any().downcast_ref::<array::Int64Array>().unwrap();
                 let data: Vec<Option<i64>> = typed.iter().collect();
-                ArrowBaselineContainer::Integer64(NullableBaselineCategoricalBins::new(&data)?)
+                BaselineContainer::Integer64(NullableBaselineCategoricalBins::new(&data)?)
             }
             DataType::UInt8 => {
                 let typed = array.as_any().downcast_ref::<array::UInt8Array>().unwrap();
                 let data: Vec<Option<u8>> = typed.iter().collect();
-                ArrowBaselineContainer::UnsignedInteger8(NullableBaselineCategoricalBins::new(
-                    &data,
-                )?)
+                BaselineContainer::UnsignedInteger8(NullableBaselineCategoricalBins::new(&data)?)
             }
             DataType::UInt16 => {
                 let typed = array.as_any().downcast_ref::<array::UInt16Array>().unwrap();
                 let data: Vec<Option<u16>> = typed.iter().collect();
-                ArrowBaselineContainer::UnsignedInteger16(NullableBaselineCategoricalBins::new(
-                    &data,
-                )?)
+                BaselineContainer::UnsignedInteger16(NullableBaselineCategoricalBins::new(&data)?)
             }
             DataType::UInt32 => {
                 let typed = array.as_any().downcast_ref::<array::UInt32Array>().unwrap();
                 let data: Vec<Option<u32>> = typed.iter().collect();
-                ArrowBaselineContainer::UnsignedInteger32(NullableBaselineCategoricalBins::new(
-                    &data,
-                )?)
+                BaselineContainer::UnsignedInteger32(NullableBaselineCategoricalBins::new(&data)?)
             }
             DataType::UInt64 => {
                 let typed = array.as_any().downcast_ref::<array::UInt64Array>().unwrap();
                 let data: Vec<Option<u64>> = typed.iter().collect();
-                ArrowBaselineContainer::UnsignedInteger64(NullableBaselineCategoricalBins::new(
-                    &data,
-                )?)
+                BaselineContainer::UnsignedInteger64(NullableBaselineCategoricalBins::new(&data)?)
             }
             DataType::Utf8 => {
                 let typed_array = array.as_any().downcast_ref::<array::StringArray>().unwrap();
                 let baseline_bins =
                     NullableBaselineCategoricalBins::from_string_array(&typed_array)?;
 
-                ArrowBaselineContainer::String(baseline_bins)
+                BaselineContainer::String(baseline_bins)
             }
             DataType::LargeUtf8 => {
                 let typed_array = array
@@ -120,7 +111,7 @@ impl ArrowBaselineColumn {
                     .unwrap();
                 let baseline_bins =
                     NullableBaselineCategoricalBins::from_string_array(&typed_array)?;
-                ArrowBaselineContainer::String(baseline_bins)
+                BaselineContainer::String(baseline_bins)
             }
             DataType::Dictionary(_, value_type)
                 if matches!(value_type.as_ref(), DataType::Utf8 | DataType::LargeUtf8) =>
@@ -131,7 +122,7 @@ impl ArrowBaselineColumn {
                 let baseline_bins =
                     NullableBaselineCategoricalBins::from_string_array(&typed_array)?;
 
-                ArrowBaselineContainer::String(baseline_bins)
+                BaselineContainer::String(baseline_bins)
             }
             DataType::Boolean => {
                 let typed_array = array
@@ -141,28 +132,28 @@ impl ArrowBaselineColumn {
 
                 let baseline_bins =
                     NullableBaselineCategoricalBins::from_boolean_array(&typed_array)?;
-                ArrowBaselineContainer::Boolean(baseline_bins)
+                BaselineContainer::Boolean(baseline_bins)
             }
             _ => {
                 return Err(DriftArrowError::UnsupportedArrowTypeError(arrow_type));
             }
         };
-        Ok(ArrowBaselineColumn {
-            arrow_type,
+        Ok(BaselineColumn {
+            datatype: arrow_type.into(),
             container,
         })
     }
 }
 
-pub struct ArrowBaselineTable {
-    pub table: HashMap<String, ArrowBaselineColumn>,
+pub struct BaselineTable {
+    pub table: HashMap<String, BaselineColumn>,
 }
 
-impl ArrowBaselineTable {
+impl BaselineTable {
     pub fn from_record_batch(
         batch: &RecordBatch,
         quantile_types_opt: Option<&HashMap<String, QuantileType>>,
-    ) -> Result<ArrowBaselineTable, DriftArrowError> {
+    ) -> Result<BaselineTable, DriftArrowError> {
         // Have an owned map to reference when the user does not provide.
         let fallback_map = HashMap::new();
         let quantile_types = quantile_types_opt.unwrap_or(&fallback_map);
@@ -176,12 +167,12 @@ impl ArrowBaselineTable {
             // Clone is on an Arc.
             table.insert(
                 name.clone(),
-                ArrowBaselineColumn::from_array(
+                BaselineColumn::from_array(
                     column_array.clone(),
                     quantile_types.get(name.as_str()).copied(),
                 )?,
             );
         }
-        Ok(ArrowBaselineTable { table })
+        Ok(BaselineTable { table })
     }
 }

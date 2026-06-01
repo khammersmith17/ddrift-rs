@@ -1,6 +1,7 @@
 use std::env;
 use std::sync::OnceLock;
 pub mod drift_thresholds;
+use crate::core::drift_metrics::{CategoricalDriftMeasurement, ContinuousDriftMeasurement};
 
 static MAX_THREADS: OnceLock<usize> = OnceLock::new();
 
@@ -11,6 +12,25 @@ pub(crate) const FLUSH_CHECK_OFFSET: usize = 255;
 const MAX_THREADS_ENV_KEY: &'static str = "DDRIFT_MAX_THREADS";
 
 const MIN_EXAMPLES_PER_THREAD: usize = 10_000_usize;
+
+pub const ALL_CONTINUOUS_DRIFT_MEASUREMENTS: [ContinuousDriftMeasurement; 6] = [
+    ContinuousDriftMeasurement::JensenShannon,
+    ContinuousDriftMeasurement::PopulationStabilityIndex,
+    ContinuousDriftMeasurement::WassersteinDistance,
+    ContinuousDriftMeasurement::KullbackLeibler,
+    ContinuousDriftMeasurement::KolmogorovSmirnov,
+    ContinuousDriftMeasurement::Hellinger,
+];
+
+pub const ALL_CATEGORICAL_DRIFT_MEASUREMENTS: [CategoricalDriftMeasurement; 7] = [
+    CategoricalDriftMeasurement::JensenShannon,
+    CategoricalDriftMeasurement::PopulationStabilityIndex,
+    CategoricalDriftMeasurement::WassersteinDistance,
+    CategoricalDriftMeasurement::KullbackLeibler,
+    CategoricalDriftMeasurement::ChiSquared,
+    CategoricalDriftMeasurement::Hellinger,
+    CategoricalDriftMeasurement::GTest,
+];
 
 fn get_max_threads() -> usize {
     *MAX_THREADS.get_or_init(|| {

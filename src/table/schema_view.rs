@@ -1,6 +1,7 @@
-use crate::baseline::ddrift_arrow::ArrowBaselineTable;
+use super::datatypes::DriftDataType;
+use crate::baseline::table::BaselineTable;
 use ahash::HashMap;
-use arrow::{datatypes::DataType, record_batch::RecordBatch};
+use arrow::record_batch::RecordBatch;
 
 pub(crate) fn validate_schema(
     baseline_schema: &SchemaView,
@@ -21,28 +22,28 @@ pub(crate) enum SchemaValidationResult {
     Invalid(InvalidSchemaReport),
 }
 
-/// Lightweight schema representation of a `[crate::ddrift_arrow::candidate::ArrowCandidateTable]` or
-/// `[crate::baseline::ddrift_arrow::ArrowBaselineTable]`
+/// Lightweight schema representation of a `[crate::table::candidate::ArrowCandidateTable]` or
+/// `[crate::baseline::table::ArrowBaselineTable]`.
 pub(crate) struct SchemaView {
-    schema: HashMap<String, DataType>,
+    schema: HashMap<String, DriftDataType>,
 }
 
 impl SchemaView {
-    pub(crate) fn from_baseline_table(table: &ArrowBaselineTable) -> SchemaView {
-        let schema: HashMap<String, DataType> = table
+    pub(crate) fn from_baseline_table(table: &BaselineTable) -> SchemaView {
+        let schema: HashMap<String, DriftDataType> = table
             .table
             .iter()
-            .map(|(name, entry)| (name.clone(), entry.arrow_type.clone()))
+            .map(|(name, entry)| (name.clone(), entry.datatype))
             .collect();
         SchemaView { schema }
     }
 
-    pub(crate) fn from_record_batch(batch: &RecordBatch) -> SchemaView {
+    pub(crate) fn from_arrow_record_batch(batch: &RecordBatch) -> SchemaView {
         let batch_schema = batch.schema();
-        let schema: HashMap<String, DataType> = batch_schema
+        let schema: HashMap<String, DriftDataType> = batch_schema
             .fields()
             .iter()
-            .map(|field| (field.name().clone(), field.data_type().clone()))
+            .map(|field| (field.name().clone(), field.data_type().into()))
             .collect();
         SchemaView { schema }
     }

@@ -8,7 +8,7 @@ use arrow::error::ArrowError;
 #[derive(Debug, Error)]
 pub enum DriftArrowError {
     #[error("Schema error: {0:?}")]
-    SchemaError(crate::ddrift_arrow::schema_view::InvalidSchemaReport),
+    SchemaError(crate::table::schema_view::InvalidSchemaReport),
     #[error("Unsupported Arrow DataType: {0:?}")]
     UnsupportedArrowTypeError(arrow::datatypes::DataType),
     #[error("Drift Error: {0:?}")]

@@ -1,5 +1,5 @@
 use crate::core::bin_edges::{CategoricalBinEdges, ContinuousBinEdges};
-use crate::ddrift_arrow::slice_impl::SliceImpl;
+use crate::table::slice_impl::SliceImpl;
 use arrow::buffer::NullBuffer;
 use num_traits::float::Float;
 use std::hash::Hash;
