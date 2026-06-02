@@ -6,7 +6,7 @@ use arrow::error::ArrowError;
 #[cfg(feature = "arrow")]
 #[non_exhaustive]
 #[derive(Debug, Error)]
-pub enum DriftArrowError {
+pub enum DriftTableError {
     #[error("Schema error: {0:?}")]
     SchemaError(crate::table::schema_view::InvalidSchemaReport),
     #[error("Unsupported Arrow DataType: {0:?}")]
@@ -18,16 +18,16 @@ pub enum DriftArrowError {
 }
 
 #[cfg(feature = "arrow")]
-impl From<DriftError> for DriftArrowError {
-    fn from(err: DriftError) -> DriftArrowError {
-        DriftArrowError::DriftError(err)
+impl From<DriftError> for DriftTableError {
+    fn from(err: DriftError) -> DriftTableError {
+        DriftTableError::DriftError(err)
     }
 }
 
 #[cfg(feature = "arrow")]
-impl From<ArrowError> for DriftArrowError {
-    fn from(err: ArrowError) -> DriftArrowError {
-        DriftArrowError::ArrowError(err)
+impl From<ArrowError> for DriftTableError {
+    fn from(err: ArrowError) -> DriftTableError {
+        DriftTableError::ArrowError(err)
     }
 }
 

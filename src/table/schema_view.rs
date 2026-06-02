@@ -1,4 +1,4 @@
-use super::datatypes::DriftDataType;
+use super::{candidate::CandidateTable, datatypes::DriftDataType};
 use crate::baseline::table::BaselineTable;
 use ahash::HashMap;
 use arrow::record_batch::RecordBatch;
@@ -24,30 +24,43 @@ pub(crate) enum SchemaValidationResult {
 
 /// Lightweight schema representation of a `[crate::table::candidate::ArrowCandidateTable]` or
 /// `[crate::baseline::table::ArrowBaselineTable]`.
-pub(crate) struct SchemaView {
-    schema: HashMap<String, DriftDataType>,
+pub(crate) struct SchemaView<'a> {
+    schema: HashMap<&'a str, DriftDataType>,
 }
 
-impl SchemaView {
-    pub(crate) fn from_baseline_table(table: &BaselineTable) -> SchemaView {
-        let schema: HashMap<String, DriftDataType> = table
-            .table
+impl<'a> From<&'a BaselineTable> for SchemaView<'a> {
+    fn from(table: &'a BaselineTable) -> SchemaView<'a> {
+        let schema: HashMap<&'a str, DriftDataType> = table
             .iter()
-            .map(|(name, entry)| (name.clone(), entry.datatype))
+            .map(|(name, entry)| (name.as_str(), entry.datatype))
             .collect();
         SchemaView { schema }
     }
+}
 
-    pub(crate) fn from_arrow_record_batch(batch: &RecordBatch) -> SchemaView {
-        let batch_schema = batch.schema();
-        let schema: HashMap<String, DriftDataType> = batch_schema
+impl<'a> From<&'a CandidateTable<'a>> for SchemaView<'a> {
+    fn from(table: &'a CandidateTable<'a>) -> SchemaView<'a> {
+        let schema: HashMap<&'a str, DriftDataType> = table
+            .iter()
+            .map(|(name, entry)| (name.as_str(), entry.datatype))
+            .collect();
+        SchemaView { schema }
+    }
+}
+
+impl<'a> From<&'a RecordBatch> for SchemaView<'a> {
+    fn from(batch: &'a RecordBatch) -> SchemaView<'a> {
+        let schema: HashMap<&'a str, DriftDataType> = batch
+            .schema_ref()
             .fields()
             .iter()
-            .map(|field| (field.name().clone(), field.data_type().into()))
+            .map(|field| (field.name().as_str(), field.data_type().into()))
             .collect();
         SchemaView { schema }
     }
+}
 
+impl<'a> SchemaView<'a> {
     pub(crate) fn validate(&self, candidate_schema: &SchemaView) -> SchemaValidationResult {
         /*
          * 1. Check types like for like.
@@ -58,7 +71,7 @@ impl SchemaView {
         let mut missing_baseline_columns: Vec<String> = Vec::new();
         let mut invalid_type_columns: Vec<String> = Vec::new();
         self.schema.iter().for_each(|(col_name, baseline_type)| {
-            if let Some(candidate_type) = candidate_schema.schema.get(col_name) {
+            if let Some(candidate_type) = candidate_schema.schema.get(*col_name) {
                 if candidate_type != baseline_type {
                     invalid_type_columns.push(col_name.to_string())
                 }

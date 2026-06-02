@@ -2,7 +2,7 @@ use super::{
     categorical::NullableBaselineCategoricalBins, continuous::NullableBaselineContinuousBins,
 };
 use crate::{
-    core::{distribution::QuantileType, error::DriftArrowError},
+    core::{distribution::QuantileType, error::DriftTableError},
     table::datatypes::DriftDataType,
 };
 use ahash::{HashMap, HashMapExt};
@@ -11,6 +11,7 @@ use arrow::{
     datatypes::DataType,
     record_batch::RecordBatch,
 };
+use std::collections::hash_map::Iter;
 
 pub enum BaselineContainer {
     FloatingPoint32(NullableBaselineContinuousBins<f32>),
@@ -36,7 +37,7 @@ impl BaselineColumn {
     pub fn from_array(
         array: ArrayRef,
         quantile_type: Option<QuantileType>,
-    ) -> Result<BaselineColumn, DriftArrowError> {
+    ) -> Result<BaselineColumn, DriftTableError> {
         let arrow_type = array.data_type().clone();
         let container = match &arrow_type {
             DataType::Float32 => {
@@ -135,7 +136,7 @@ impl BaselineColumn {
                 BaselineContainer::Boolean(baseline_bins)
             }
             _ => {
-                return Err(DriftArrowError::UnsupportedArrowTypeError(arrow_type));
+                return Err(DriftTableError::UnsupportedArrowTypeError(arrow_type));
             }
         };
         Ok(BaselineColumn {
@@ -153,7 +154,7 @@ impl BaselineTable {
     pub fn from_record_batch(
         batch: &RecordBatch,
         quantile_types_opt: Option<&HashMap<String, QuantileType>>,
-    ) -> Result<BaselineTable, DriftArrowError> {
+    ) -> Result<BaselineTable, DriftTableError> {
         // Have an owned map to reference when the user does not provide.
         let fallback_map = HashMap::new();
         let quantile_types = quantile_types_opt.unwrap_or(&fallback_map);
@@ -174,5 +175,9 @@ impl BaselineTable {
             );
         }
         Ok(BaselineTable { table })
+    }
+
+    pub(crate) fn iter(&self) -> Iter<String, BaselineColumn> {
+        self.table.iter()
     }
 }

@@ -12,7 +12,7 @@ use crate::{
         dataset_view::candidate::{
             NullableCategoricalCandidateView, NullableContinuousCandidateView,
         },
-        error::DriftArrowError,
+        error::DriftTableError,
     },
 };
 use ahash::{HashMap, HashMapExt};
@@ -21,6 +21,7 @@ use arrow::{
     datatypes::DataType,
     record_batch::RecordBatch,
 };
+use std::collections::hash_map::Iter;
 use std::sync::Arc;
 
 fn candidate_arrow_array_string_dispatch<'a>(
@@ -78,7 +79,7 @@ impl<'a> CandidateColumn<'a> {
     pub(super) fn from_baseline_and_array(
         baseline: &'a BaselineColumn,
         array: ArrayRef,
-    ) -> Result<CandidateColumn<'a>, DriftArrowError> {
+    ) -> Result<CandidateColumn<'a>, DriftTableError> {
         let &BaselineColumn {
             datatype: ref baseline_type,
             container: ref baseline_container,
@@ -258,13 +259,13 @@ impl<'a> CandidateTable<'a> {
     pub fn from_arrow_record_batch(
         baseline_table: &'a BaselineTable,
         record_batch: Arc<RecordBatch>,
-    ) -> Result<CandidateTable<'a>, DriftArrowError> {
-        let bl_schema = SchemaView::from_baseline_table(baseline_table);
-        let candidate_schema = SchemaView::from_arrow_record_batch(&record_batch);
+    ) -> Result<CandidateTable<'a>, DriftTableError> {
+        let bl_schema: SchemaView = baseline_table.into();
+        let candidate_schema: SchemaView = record_batch.as_ref().into();
         if let SchemaValidationResult::Invalid(diff) =
             validate_schema(&bl_schema, &candidate_schema)
         {
-            return Err(DriftArrowError::SchemaError(diff));
+            return Err(DriftTableError::SchemaError(diff));
         }
 
         let mut table = HashMap::with_capacity(baseline_table.table.len());
@@ -277,5 +278,13 @@ impl<'a> CandidateTable<'a> {
             );
         }
         Ok(CandidateTable { table })
+    }
+
+    pub fn get_column(&self, column_name: &str) -> Option<&CandidateColumn<'a>> {
+        self.table.get(column_name)
+    }
+
+    pub(crate) fn iter(&self) -> Iter<String, CandidateColumn<'a>> {
+        self.table.iter()
     }
 }
