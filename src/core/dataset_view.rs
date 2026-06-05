@@ -216,6 +216,28 @@ pub mod candidate {
                 null_count: null_c as usize,
             })
         }
+
+        pub fn insert_arrow_array(
+            &mut self,
+            dataset: &[T],
+            null_buffer: Option<&arrow::buffer::NullBuffer>,
+        ) -> Result<(), DriftError> {
+            if dataset.is_empty() {
+                return Err(DriftError::EmptyRuntimeData);
+            }
+
+            let size = dataset.len();
+            let (new_bins, null_c) = crate::core::ddrift_arrow::compute_bins_continuous(
+                dataset,
+                self.bin_edges,
+                null_buffer,
+            );
+
+            crate::core::fold_bins(&mut self.quantile_bins, &new_bins);
+            self.size += size;
+            self.null_count += null_c as usize;
+            Ok(())
+        }
     }
 
     impl<'a, T: Float + Send + Sync> NullableContinuousCandidateView<'a, T> {
@@ -311,6 +333,28 @@ pub mod candidate {
                 null_count: null_c as usize,
             })
         }
+
+        pub fn insert_arrow_array(
+            &mut self,
+            dataset: &[T],
+            null_buffer: Option<&arrow::buffer::NullBuffer>,
+        ) -> Result<(), DriftError> {
+            if dataset.is_empty() {
+                return Err(DriftError::EmptyRuntimeData);
+            }
+
+            let size = dataset.len();
+            let (new_bins, null_c) = crate::core::ddrift_arrow::compute_bins_categorical(
+                dataset,
+                self.bin_edges,
+                null_buffer,
+            );
+
+            crate::core::fold_bins(&mut self.quantile_bins, &new_bins);
+            self.size += size;
+            self.null_count += null_c as usize;
+            Ok(())
+        }
     }
 
     #[cfg(feature = "arrow")]
@@ -336,6 +380,27 @@ pub mod candidate {
                 null_count: null_count as usize,
             })
         }
+
+        pub fn insert_string_slice<
+            'slice,
+            S: crate::table::slice_impl::SliceImpl<&'slice str> + Send + Sync,
+        >(
+            &mut self,
+            slice: &S,
+        ) -> Result<(), DriftError> {
+            if slice.is_empty() {
+                return Err(DriftError::EmptyRuntimeData);
+            }
+
+            let size = slice.len();
+            let (new_bins, null_count) =
+                crate::core::ddrift_arrow::compute_bins_arrow_string_slice(slice, self.bin_edges);
+
+            crate::core::fold_bins(&mut self.quantile_bins, &new_bins);
+            self.size += size;
+            self.null_count += null_count as usize;
+            Ok(())
+        }
     }
 
     #[cfg(feature = "arrow")]
@@ -357,6 +422,23 @@ pub mod candidate {
                 size,
                 null_count: null_count as usize,
             })
+        }
+
+        pub fn insert_bool_slice<S: crate::table::slice_impl::SliceImpl<bool> + Send + Sync>(
+            &mut self,
+            slice: &S,
+        ) -> Result<(), DriftError> {
+            if slice.is_empty() {
+                return Err(DriftError::EmptyRuntimeData);
+            }
+
+            let size = slice.len();
+            let (new_bins, null_count) =
+                crate::core::ddrift_arrow::compute_bins_arrow_bool_slice(slice, self.bin_edges);
+            crate::core::fold_bins(&mut self.quantile_bins, &new_bins);
+            self.size += size;
+            self.null_count += null_count as usize;
+            Ok(())
         }
     }
 

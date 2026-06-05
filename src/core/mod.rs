@@ -14,6 +14,14 @@ use num_traits::Float;
 use std::collections::BTreeMap;
 use std::hash::Hash;
 
+pub(crate) fn fold_bins(destination: &mut [f64], source: &[f64]) {
+    debug_assert_eq!(destination.len(), source.len());
+    destination
+        .iter_mut()
+        .enumerate()
+        .for_each(|(i, bin)| *bin += source[i]);
+}
+
 pub(crate) fn compute_dataset_from_bins_continuous<T: Float + Send + Sync>(
     dataset: &[T],
     edges: &ContinuousBinEdges<T>,

@@ -12,7 +12,7 @@ use crate::{
         dataset_view::candidate::{
             NullableCategoricalCandidateView, NullableContinuousCandidateView,
         },
-        error::DriftTableError,
+        error::{DriftError, DriftTableError},
     },
 };
 use ahash::{HashMap, HashMapExt};
@@ -23,6 +23,33 @@ use arrow::{
 };
 use std::collections::hash_map::Iter;
 use std::sync::Arc;
+
+fn canidate_arrow_array_string_insert_dispatch<'a>(
+    view: &mut NullableCategoricalCandidateView<'a, String>,
+    array: ArrayRef,
+) -> Result<(), DriftError> {
+    use super::slice_impl::{StringSlice32, StringSlice64};
+    match array.data_type() {
+        DataType::Utf8 | DataType::Dictionary(_, _) => {
+            let typed = array
+                .as_any()
+                .downcast_ref::<arrow::array::StringArray>()
+                .unwrap();
+            let slice = StringSlice32::from_array(typed);
+            view.insert_string_slice(&slice)?;
+        }
+        DataType::LargeUtf8 => {
+            let typed = array
+                .as_any()
+                .downcast_ref::<arrow::array::LargeStringArray>()
+                .unwrap();
+            let slice = StringSlice64::from_array(typed);
+            view.insert_string_slice(&slice)?;
+        }
+        _ => unreachable!(),
+    }
+    Ok(())
+}
 
 fn candidate_arrow_array_string_dispatch<'a>(
     array: ArrayRef,
@@ -241,6 +268,94 @@ impl<'a> CandidateColumn<'a> {
             container,
         })
     }
+
+    pub(super) fn insert(&mut self, array: ArrayRef) -> Result<(), DriftTableError> {
+        match &mut self.container {
+            CandidateContainer::FloatingPoint32(view) => {
+                let typed = array
+                    .as_any()
+                    .downcast_ref::<arrow::array::Float32Array>()
+                    .unwrap();
+                view.insert_arrow_array(typed.values(), typed.nulls())?;
+            }
+            CandidateContainer::FloatingPoint64(view) => {
+                let typed = array
+                    .as_any()
+                    .downcast_ref::<arrow::array::Float64Array>()
+                    .unwrap();
+                view.insert_arrow_array(typed.values(), typed.nulls())?;
+            }
+            CandidateContainer::Integer8(view) => {
+                let typed = array
+                    .as_any()
+                    .downcast_ref::<arrow::array::Int8Array>()
+                    .unwrap();
+                view.insert_arrow_array(typed.values(), typed.nulls())?;
+            }
+            CandidateContainer::Integer16(view) => {
+                let typed = array
+                    .as_any()
+                    .downcast_ref::<arrow::array::Int16Array>()
+                    .unwrap();
+                view.insert_arrow_array(typed.values(), typed.nulls())?;
+            }
+            CandidateContainer::Integer32(view) => {
+                let typed = array
+                    .as_any()
+                    .downcast_ref::<arrow::array::Int32Array>()
+                    .unwrap();
+                view.insert_arrow_array(typed.values(), typed.nulls())?;
+            }
+            CandidateContainer::Integer64(view) => {
+                let typed = array
+                    .as_any()
+                    .downcast_ref::<arrow::array::Int64Array>()
+                    .unwrap();
+                view.insert_arrow_array(typed.values(), typed.nulls())?;
+            }
+            CandidateContainer::UnsignedInteger8(view) => {
+                let typed = array
+                    .as_any()
+                    .downcast_ref::<arrow::array::UInt8Array>()
+                    .unwrap();
+                view.insert_arrow_array(typed.values(), typed.nulls())?;
+            }
+            CandidateContainer::UnsignedInteger16(view) => {
+                let typed = array
+                    .as_any()
+                    .downcast_ref::<arrow::array::UInt16Array>()
+                    .unwrap();
+                view.insert_arrow_array(typed.values(), typed.nulls())?;
+            }
+            CandidateContainer::UnsignedInteger32(view) => {
+                let typed = array
+                    .as_any()
+                    .downcast_ref::<arrow::array::UInt32Array>()
+                    .unwrap();
+                view.insert_arrow_array(typed.values(), typed.nulls())?;
+            }
+            CandidateContainer::UnsignedInteger64(view) => {
+                let typed = array
+                    .as_any()
+                    .downcast_ref::<arrow::array::UInt64Array>()
+                    .unwrap();
+                view.insert_arrow_array(typed.values(), typed.nulls())?;
+            }
+            CandidateContainer::String(view) => {
+                canidate_arrow_array_string_insert_dispatch(view, array)?;
+            }
+            CandidateContainer::Boolean(view) => {
+                use super::slice_impl::BooleanSlice;
+                let typed = array
+                    .as_any()
+                    .downcast_ref::<arrow::array::BooleanArray>()
+                    .unwrap();
+                let slice = BooleanSlice::from_array(typed);
+                view.insert_bool_slice(&slice)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 pub struct CandidateTable<'a> {
@@ -261,10 +376,8 @@ impl<'a> CandidateTable<'a> {
         record_batch: Arc<RecordBatch>,
     ) -> Result<CandidateTable<'a>, DriftTableError> {
         let bl_schema: SchemaView = baseline_table.into();
-        let candidate_schema: SchemaView = record_batch.as_ref().into();
-        if let SchemaValidationResult::Invalid(diff) =
-            validate_schema(&bl_schema, &candidate_schema)
-        {
+        let c_schema: SchemaView = record_batch.as_ref().into();
+        if let SchemaValidationResult::Invalid(diff) = validate_schema(&bl_schema, &c_schema) {
             return Err(DriftTableError::SchemaError(diff));
         }
 
@@ -278,6 +391,24 @@ impl<'a> CandidateTable<'a> {
             );
         }
         Ok(CandidateTable { table })
+    }
+
+    pub fn insert_record_batch(
+        &mut self,
+        record_batch: Arc<RecordBatch>,
+    ) -> Result<(), DriftTableError> {
+        // Get a temporary exclusive reference.
+        let t_schema: SchemaView = (&(*self)).into();
+        let b_schema: SchemaView = record_batch.as_ref().into();
+        if let SchemaValidationResult::Invalid(diff) = validate_schema(&t_schema, &b_schema) {
+            return Err(DriftTableError::SchemaError(diff));
+        }
+        for (name, column) in self.table.iter_mut() {
+            // SAFETY: schema validated above ensures column exists with matching type.
+            let array = record_batch.column_by_name(name).unwrap().clone();
+            column.insert(array)?;
+        }
+        Ok(())
     }
 
     pub fn get_column(&self, column_name: &str) -> Option<&CandidateColumn<'a>> {

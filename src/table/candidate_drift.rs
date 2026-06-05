@@ -30,7 +30,7 @@ pub fn compute_table_drift(
         return Err(DriftTableError::SchemaError(diff));
     }
     for (column, baseline_state) in baseline_table.iter() {
-        // SAFETY: At this point we know its there.
+        // SAFETY: At this point we know schema is valid.
         let candidate = candidate_table.get_column(column).unwrap();
     }
 
