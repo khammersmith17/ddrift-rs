@@ -322,7 +322,7 @@ impl<T: Float + Send + Sync> NullableContinuousDataDrift<T> {
         let DriftComputationMulti { drift } = compute_drift_continuous_multi(self, drift_types);
         self.clear_rt();
         Ok(NullableDriftComputationMulti {
-            drift,
+            drift: drift.into(),
             null_percentage,
         })
     }

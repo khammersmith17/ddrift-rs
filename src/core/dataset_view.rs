@@ -52,6 +52,29 @@ pub mod total {
                 candidate_count: candidate_count as f64,
             }
         }
+
+        pub(crate) fn new_from_parts(
+            baseline: DriftActorComponents<'a>,
+            candidate: DriftActorComponents<'a>,
+        ) -> ComputationView<'a> {
+            let DriftActorComponents {
+                bins: baseline_bins,
+                count: baseline_count,
+            } = baseline;
+
+            let DriftActorComponents {
+                bins: candidate_bins,
+                count: candidate_count,
+            } = candidate;
+            debug_assert_eq!(baseline_bins.len(), candidate_bins.len());
+
+            ComputationView {
+                baseline_bins,
+                candidate_bins,
+                baseline_count: baseline_count as f64,
+                candidate_count: candidate_count as f64,
+            }
+        }
     }
 
     pub struct NullableComputationView<'a> {
@@ -59,8 +82,8 @@ pub mod total {
         candidate_bins: &'a [f64],
         baseline_count: f64,
         candidate_count: f64,
-        baseline_null_count: f64,
-        candidate_null_count: f64,
+        pub(crate) baseline_null_count: f64,
+        pub(crate) candidate_null_count: f64,
     }
 
     impl<'a> DriftContainer for NullableComputationView<'a> {
@@ -97,6 +120,33 @@ pub mod total {
                 count: candidate_count,
                 null_count: candidate_null_count,
             } = candidate.nullable_components();
+            debug_assert_eq!(baseline_bins.len(), candidate_bins.len());
+
+            NullableComputationView {
+                baseline_bins,
+                candidate_bins,
+                baseline_count: baseline_count as f64,
+                candidate_count: candidate_count as f64,
+                baseline_null_count: baseline_null_count as f64,
+                candidate_null_count: candidate_null_count as f64,
+            }
+        }
+
+        pub(crate) fn new_from_parts(
+            baseline: NullDriftActorComponents<'a>,
+            candidate: NullDriftActorComponents<'a>,
+        ) -> NullableComputationView<'a> {
+            let NullDriftActorComponents {
+                bins: baseline_bins,
+                count: baseline_count,
+                null_count: baseline_null_count,
+            } = baseline;
+
+            let NullDriftActorComponents {
+                bins: candidate_bins,
+                count: candidate_count,
+                null_count: candidate_null_count,
+            } = candidate;
             debug_assert_eq!(baseline_bins.len(), candidate_bins.len());
 
             NullableComputationView {

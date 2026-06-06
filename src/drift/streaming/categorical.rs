@@ -319,7 +319,7 @@ impl<T: Hash + Ord + Clone, M: StreamingDataDriftMark> NullableStreamingCategori
         let DriftComputationMulti { drift } = compute_drift_categorical_multi(self, drift_types);
 
         Ok(NullableDriftComputationMulti {
-            drift,
+            drift: drift.into(),
             null_percentage: self.null_count / self.total_stream_size,
         })
     }

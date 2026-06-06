@@ -280,7 +280,7 @@ impl<T: Float, M: StreamingDataDriftMark> NullableStreamingContinuousDataDrift<T
 
         let DriftComputationMulti { drift } = compute_drift_continuous_multi(self, drift_types);
         Ok(NullableDriftComputationMulti {
-            drift,
+            drift: drift.into(),
             null_percentage: self.null_count / self.total_stream_size,
         })
     }

@@ -121,7 +121,7 @@ impl<T: Hash + Ord + Clone> NullableCategoricalDataDrift<T> {
         let DriftComputationMulti { drift } = compute_drift_categorical_multi(self, drift_types);
         self.clear_rt();
         Ok(NullableDriftComputationMulti {
-            drift,
+            drift: drift.into(),
             null_percentage,
         })
     }
@@ -169,7 +169,7 @@ impl<T: Hash + Ord + Clone + Send + Sync> NullableCategoricalDataDrift<T> {
         let DriftComputationMulti { drift } = compute_drift_categorical_multi(self, drift_types);
         self.clear_rt();
         Ok(NullableDriftComputationMulti {
-            drift,
+            drift: drift.into(),
             null_percentage,
         })
     }

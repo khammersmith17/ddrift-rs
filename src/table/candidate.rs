@@ -1,4 +1,5 @@
 use super::{
+    ColumnTypeClass,
     datatypes::DriftDataType,
     schema_view::{SchemaValidationResult, validate_schema},
 };
@@ -14,6 +15,7 @@ use crate::{
         },
         error::{DriftError, DriftTableError},
     },
+    drift::{NullDriftActorComponents, NullableDriftActor},
 };
 use ahash::{HashMap, HashMapExt};
 use arrow::{
@@ -94,6 +96,33 @@ pub enum CandidateContainer<'a> {
     UnsignedInteger8(NullableCategoricalCandidateView<'a, u8>),
     String(NullableCategoricalCandidateView<'a, String>),
     Boolean(NullableCategoricalCandidateView<'a, bool>),
+}
+
+impl<'a> CandidateContainer<'a> {
+    fn computation_view(&'a self) -> NullDriftActorComponents<'a> {
+        match self {
+            Self::FloatingPoint32(view) => view.nullable_components(),
+            Self::FloatingPoint64(view) => view.nullable_components(),
+            Self::Integer64(view) => view.nullable_components(),
+            Self::Integer32(view) => view.nullable_components(),
+            Self::Integer16(view) => view.nullable_components(),
+            Self::Integer8(view) => view.nullable_components(),
+            Self::UnsignedInteger64(view) => view.nullable_components(),
+            Self::UnsignedInteger32(view) => view.nullable_components(),
+            Self::UnsignedInteger16(view) => view.nullable_components(),
+            Self::UnsignedInteger8(view) => view.nullable_components(),
+            Self::String(view) => view.nullable_components(),
+            Self::Boolean(view) => view.nullable_components(),
+        }
+    }
+
+    fn type_class(&self) -> ColumnTypeClass {
+        if matches!(self, Self::FloatingPoint32(_) | Self::FloatingPoint64(_)) {
+            ColumnTypeClass::Continuous
+        } else {
+            ColumnTypeClass::Categorical
+        }
+    }
 }
 
 pub struct CandidateColumn<'a> {
@@ -355,6 +384,14 @@ impl<'a> CandidateColumn<'a> {
             }
         }
         Ok(())
+    }
+
+    pub(crate) fn computation_view(&'a self) -> NullDriftActorComponents<'a> {
+        self.container.computation_view()
+    }
+
+    pub(crate) fn type_class(&self) -> ColumnTypeClass {
+        self.container.type_class()
     }
 }
 

@@ -3,7 +3,8 @@ use super::{
 };
 use crate::{
     core::{distribution::QuantileType, error::DriftTableError},
-    table::datatypes::DriftDataType,
+    drift::{NullDriftActorComponents, NullableDriftActor},
+    table::{ColumnTypeClass, datatypes::DriftDataType},
 };
 use ahash::{HashMap, HashMapExt};
 use arrow::{
@@ -26,6 +27,33 @@ pub enum BaselineContainer {
     UnsignedInteger8(NullableBaselineCategoricalBins<u8>),
     String(NullableBaselineCategoricalBins<String>),
     Boolean(NullableBaselineCategoricalBins<bool>),
+}
+
+impl BaselineContainer {
+    fn computation_view<'a>(&'a self) -> NullDriftActorComponents<'a> {
+        match self {
+            Self::FloatingPoint32(view) => view.nullable_components(),
+            Self::FloatingPoint64(view) => view.nullable_components(),
+            Self::Integer64(view) => view.nullable_components(),
+            Self::Integer32(view) => view.nullable_components(),
+            Self::Integer16(view) => view.nullable_components(),
+            Self::Integer8(view) => view.nullable_components(),
+            Self::UnsignedInteger64(view) => view.nullable_components(),
+            Self::UnsignedInteger32(view) => view.nullable_components(),
+            Self::UnsignedInteger16(view) => view.nullable_components(),
+            Self::UnsignedInteger8(view) => view.nullable_components(),
+            Self::String(view) => view.nullable_components(),
+            Self::Boolean(view) => view.nullable_components(),
+        }
+    }
+
+    fn type_class(&self) -> ColumnTypeClass {
+        if matches!(self, Self::FloatingPoint32(_) | Self::FloatingPoint64(_)) {
+            ColumnTypeClass::Continuous
+        } else {
+            ColumnTypeClass::Categorical
+        }
+    }
 }
 
 pub struct BaselineColumn {
@@ -144,6 +172,14 @@ impl BaselineColumn {
             container,
         })
     }
+
+    pub(crate) fn computation_view<'a>(&'a self) -> NullDriftActorComponents<'a> {
+        self.container.computation_view()
+    }
+
+    pub(crate) fn type_class(&self) -> ColumnTypeClass {
+        self.container.type_class()
+    }
 }
 
 pub struct BaselineTable {
@@ -179,5 +215,9 @@ impl BaselineTable {
 
     pub(crate) fn iter(&self) -> Iter<String, BaselineColumn> {
         self.table.iter()
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.table.len()
     }
 }
