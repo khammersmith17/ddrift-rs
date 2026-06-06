@@ -52,3 +52,36 @@ pub struct NullableDriftComputationMulti<T: crate::core::drift_metrics::DriftMea
     pub drift: Vec<DriftComputation<T>>,
     pub null_percentage: f64,
 }
+
+pub(crate) struct DriftActorComponents<'a> {
+    pub(crate) bins: &'a [f64],
+    pub(crate) count: usize,
+}
+
+pub(crate) struct NullDriftActorComponents<'a> {
+    pub(crate) bins: &'a [f64],
+    pub(crate) count: usize,
+    pub(crate) null_count: usize,
+}
+
+pub trait DriftActor<'a> {
+    fn quantile_bins(&'a self) -> &'a [f64];
+    fn example_count(&self) -> usize;
+    fn components(&'a self) -> DriftActorComponents<'a> {
+        DriftActorComponents {
+            bins: self.quantile_bins(),
+            count: self.example_count(),
+        }
+    }
+}
+
+pub trait NullableDriftActor<'a>: DriftActor<'a> {
+    fn null_count(&self) -> usize;
+    fn nullable_components(&'a self) -> NullDriftActorComponents<'a> {
+        NullDriftActorComponents {
+            bins: self.quantile_bins(),
+            count: self.example_count(),
+            null_count: self.null_count(),
+        }
+    }
+}

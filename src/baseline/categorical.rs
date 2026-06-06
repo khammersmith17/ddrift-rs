@@ -5,6 +5,7 @@ use crate::{
         error::{DriftError, DriftExportError},
         nullable_categorical_derive_baseline_state,
     },
+    drift::{DriftActor, NullableDriftActor},
     export::{CategoricalDriftBaselineExport, NullableCategoricalDriftBaselineExport},
 };
 use ahash::HashMap;
@@ -25,6 +26,16 @@ pub struct BaselineCategoricalBins<T: Hash + Ord + Clone> {
     pub(crate) bin_edges: CategoricalBinEdges<T>,
     pub(crate) baseline_bins: Vec<f64>,
     pub(crate) sample_size: f64,
+}
+
+impl<'a, T: Hash + Ord + Clone> DriftActor<'a> for BaselineCategoricalBins<T> {
+    fn quantile_bins(&'a self) -> &'a [f64] {
+        &self.baseline_bins
+    }
+
+    fn example_count(&self) -> usize {
+        self.sample_size as usize
+    }
 }
 
 impl<T: Hash + Ord + Clone + serde::Serialize> TryFrom<BaselineCategoricalBins<T>>
@@ -176,6 +187,22 @@ pub struct NullableBaselineCategoricalBins<T: Hash + Ord + Clone> {
     pub(crate) baseline_bins: Vec<f64>,
     pub(crate) total_samples: f64,
     pub(crate) null_samples: f64,
+}
+
+impl<'a, T: Hash + Ord + Clone> DriftActor<'a> for NullableBaselineCategoricalBins<T> {
+    fn quantile_bins(&'a self) -> &'a [f64] {
+        &self.baseline_bins
+    }
+
+    fn example_count(&self) -> usize {
+        self.total_samples as usize
+    }
+}
+
+impl<'a, T: Hash + Ord + Clone> NullableDriftActor<'a> for NullableBaselineCategoricalBins<T> {
+    fn null_count(&self) -> usize {
+        self.null_samples as usize
+    }
 }
 
 #[cfg(feature = "arrow")]

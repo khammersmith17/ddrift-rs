@@ -1,6 +1,6 @@
 use super::{
     datatypes::DriftDataType,
-    schema_view::{SchemaValidationResult, SchemaView, validate_schema},
+    schema_view::{SchemaValidationResult, validate_schema},
 };
 use crate::{
     baseline::{
@@ -375,9 +375,9 @@ impl<'a> CandidateTable<'a> {
         baseline_table: &'a BaselineTable,
         record_batch: Arc<RecordBatch>,
     ) -> Result<CandidateTable<'a>, DriftTableError> {
-        let bl_schema: SchemaView = baseline_table.into();
-        let c_schema: SchemaView = record_batch.as_ref().into();
-        if let SchemaValidationResult::Invalid(diff) = validate_schema(&bl_schema, &c_schema) {
+        if let SchemaValidationResult::Invalid(diff) =
+            validate_schema(baseline_table, record_batch.as_ref())
+        {
             return Err(DriftTableError::SchemaError(diff));
         }
 
@@ -398,9 +398,9 @@ impl<'a> CandidateTable<'a> {
         record_batch: Arc<RecordBatch>,
     ) -> Result<(), DriftTableError> {
         // Get a temporary exclusive reference.
-        let t_schema: SchemaView = (&(*self)).into();
-        let b_schema: SchemaView = record_batch.as_ref().into();
-        if let SchemaValidationResult::Invalid(diff) = validate_schema(&t_schema, &b_schema) {
+        if let SchemaValidationResult::Invalid(diff) =
+            validate_schema(&(*self), record_batch.as_ref())
+        {
             return Err(DriftTableError::SchemaError(diff));
         }
         for (name, column) in self.table.iter_mut() {

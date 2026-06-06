@@ -1,3 +1,115 @@
+pub mod total {
+    use crate::{
+        core::drift_metrics::DriftContainer,
+        drift::{DriftActor, DriftActorComponents, NullDriftActorComponents, NullableDriftActor},
+    };
+
+    pub struct ComputationView<'a> {
+        baseline_bins: &'a [f64],
+        candidate_bins: &'a [f64],
+        baseline_count: f64,
+        candidate_count: f64,
+    }
+
+    impl<'a> DriftContainer for ComputationView<'a> {
+        fn baseline_bins(&self) -> &[f64] {
+            self.baseline_bins
+        }
+
+        fn runtime_bins(&self) -> &[f64] {
+            self.candidate_bins
+        }
+
+        fn runtime_sample_size(&self) -> f64 {
+            self.candidate_count as f64
+        }
+
+        fn baseline_sample_size(&self) -> f64 {
+            self.baseline_count as f64
+        }
+    }
+
+    impl<'a> ComputationView<'a> {
+        pub(crate) fn new<B: DriftActor<'a>, C: DriftActor<'a>>(
+            baseline: &'a B,
+            candidate: &'a C,
+        ) -> ComputationView<'a> {
+            let DriftActorComponents {
+                bins: baseline_bins,
+                count: baseline_count,
+            } = baseline.components();
+
+            let DriftActorComponents {
+                bins: candidate_bins,
+                count: candidate_count,
+            } = candidate.components();
+            debug_assert_eq!(baseline_bins.len(), candidate_bins.len());
+
+            ComputationView {
+                baseline_bins,
+                candidate_bins,
+                baseline_count: baseline_count as f64,
+                candidate_count: candidate_count as f64,
+            }
+        }
+    }
+
+    pub struct NullableComputationView<'a> {
+        baseline_bins: &'a [f64],
+        candidate_bins: &'a [f64],
+        baseline_count: f64,
+        candidate_count: f64,
+        baseline_null_count: f64,
+        candidate_null_count: f64,
+    }
+
+    impl<'a> DriftContainer for NullableComputationView<'a> {
+        fn baseline_bins(&self) -> &[f64] {
+            self.baseline_bins
+        }
+
+        fn runtime_bins(&self) -> &[f64] {
+            self.candidate_bins
+        }
+
+        fn runtime_sample_size(&self) -> f64 {
+            self.candidate_count as f64
+        }
+
+        fn baseline_sample_size(&self) -> f64 {
+            self.baseline_count as f64
+        }
+    }
+
+    impl<'a> NullableComputationView<'a> {
+        pub(crate) fn new<B: NullableDriftActor<'a>, C: NullableDriftActor<'a>>(
+            baseline: &'a B,
+            candidate: &'a C,
+        ) -> NullableComputationView<'a> {
+            let NullDriftActorComponents {
+                bins: baseline_bins,
+                count: baseline_count,
+                null_count: baseline_null_count,
+            } = baseline.nullable_components();
+
+            let NullDriftActorComponents {
+                bins: candidate_bins,
+                count: candidate_count,
+                null_count: candidate_null_count,
+            } = candidate.nullable_components();
+            debug_assert_eq!(baseline_bins.len(), candidate_bins.len());
+
+            NullableComputationView {
+                baseline_bins,
+                candidate_bins,
+                baseline_count: baseline_count as f64,
+                candidate_count: candidate_count as f64,
+                baseline_null_count: baseline_null_count as f64,
+                candidate_null_count: candidate_null_count as f64,
+            }
+        }
+    }
+}
 pub mod profile {
 
     use crate::baseline::{
@@ -163,10 +275,22 @@ pub mod candidate {
     use num_traits::Float;
     use std::hash::Hash;
 
+    use crate::drift::{DriftActor, NullableDriftActor};
+
     pub struct ContinuousCandidateView<'a, T: Float> {
         pub bin_edges: &'a ContinuousBinEdges<T>,
         pub quantile_bins: Vec<f64>,
         pub size: usize,
+    }
+
+    impl<'a, T: Float> DriftActor<'a> for ContinuousCandidateView<'a, T> {
+        fn quantile_bins(&'a self) -> &'a [f64] {
+            &self.quantile_bins
+        }
+
+        fn example_count(&self) -> usize {
+            self.size
+        }
     }
 
     impl<'a, T: Float + Send + Sync> ContinuousCandidateView<'a, T> {
@@ -193,6 +317,22 @@ pub mod candidate {
         pub quantile_bins: Vec<f64>,
         pub size: usize,
         pub null_count: usize,
+    }
+
+    impl<'a, T: Float> DriftActor<'a> for NullableContinuousCandidateView<'a, T> {
+        fn quantile_bins(&'a self) -> &'a [f64] {
+            &self.quantile_bins
+        }
+
+        fn example_count(&self) -> usize {
+            self.size
+        }
+    }
+
+    impl<'a, T: Float> NullableDriftActor<'a> for NullableContinuousCandidateView<'a, T> {
+        fn null_count(&self) -> usize {
+            self.null_count
+        }
     }
 
     #[cfg(feature = "arrow")]
@@ -267,6 +407,16 @@ pub mod candidate {
         pub size: usize,
     }
 
+    impl<'a, T: Hash + Ord + Clone> DriftActor<'a> for CategoricalCandidateView<'a, T> {
+        fn quantile_bins(&'a self) -> &'a [f64] {
+            &self.quantile_bins
+        }
+
+        fn example_count(&self) -> usize {
+            self.size
+        }
+    }
+
     impl<'a, T: Hash + Ord + Clone> CategoricalCandidateView<'a, T> {
         pub fn from_bin_edges(
             dataset: &[T],
@@ -308,6 +458,22 @@ pub mod candidate {
         pub quantile_bins: Vec<f64>,
         pub size: usize,
         pub null_count: usize,
+    }
+
+    impl<'a, T: Hash + Ord + Clone> DriftActor<'a> for NullableCategoricalCandidateView<'a, T> {
+        fn quantile_bins(&'a self) -> &'a [f64] {
+            &self.quantile_bins
+        }
+
+        fn example_count(&self) -> usize {
+            self.size
+        }
+    }
+
+    impl<'a, T: Hash + Ord + Clone> NullableDriftActor<'a> for NullableCategoricalCandidateView<'a, T> {
+        fn null_count(&self) -> usize {
+            self.null_count
+        }
     }
 
     #[cfg(feature = "arrow")]

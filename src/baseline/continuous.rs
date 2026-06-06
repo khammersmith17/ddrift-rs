@@ -5,8 +5,10 @@ use crate::{
         distribution::{MIN_BIN_CLAMP, QuantileType},
         error::{DriftError, DriftExportError},
     },
+    drift::{DriftActor, NullableDriftActor},
     export::{ContinuousDriftBaselineExport, NullableContinuousDriftBaselineExport},
 };
+
 #[cfg(feature = "arrow")]
 use arrow::array::{Float32Array, Float64Array};
 use num_traits::Float;
@@ -76,6 +78,22 @@ pub struct NullableBaselineContinuousBins<T: Float> {
     pub(crate) quantile_type: QuantileType,
     pub(crate) sample_size: f64,
     pub(crate) null_count: f64,
+}
+
+impl<'a, T: Float> DriftActor<'a> for NullableBaselineContinuousBins<T> {
+    fn quantile_bins(&'a self) -> &'a [f64] {
+        &self.baseline_hist
+    }
+
+    fn example_count(&self) -> usize {
+        self.sample_size as usize
+    }
+}
+
+impl<'a, T: Float> NullableDriftActor<'a> for NullableBaselineContinuousBins<T> {
+    fn null_count(&self) -> usize {
+        self.null_count as usize
+    }
 }
 
 impl<T: Float> NullableBaselineContinuousBins<T> {
@@ -247,6 +265,16 @@ pub struct BaselineContinuousBins<T: Float> {
     pub(crate) baseline_hist: Vec<f64>,
     pub(crate) sample_size: f64,
     pub(crate) quantile_type: QuantileType,
+}
+
+impl<'a, T: Float> DriftActor<'a> for BaselineContinuousBins<T> {
+    fn quantile_bins(&'a self) -> &'a [f64] {
+        &self.baseline_hist
+    }
+
+    fn example_count(&self) -> usize {
+        self.sample_size as usize
+    }
 }
 
 impl<T: Float + serde::de::DeserializeOwned> TryFrom<ContinuousDriftBaselineExport<T>>

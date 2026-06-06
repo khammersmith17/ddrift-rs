@@ -208,11 +208,16 @@ fn categorical_drift_computation<T: DriftContainer>(
     }
 }
 
-// Derive the bin ratio, applying numerical stablity.
-// Expects the reciprocal of population size count.
+// Numerically stable division.
 #[inline]
-fn stable_apply_ratio(bin_c: f64, pop_recip: f64) -> f64 {
-    ((bin_c * pop_recip) + STABILITY_EPS).max(STABILITY_EPS)
+fn numeric_stable_divide(dividened: f64, divisor: f64) -> f64 {
+    (dividened / (divisor + STABILITY_EPS)).max(STABILITY_EPS)
+}
+
+// Derive the bin ratio, applying numerical stablity.
+#[inline]
+fn stable_apply_ratio(bin_c: f64, pop_size: f64) -> f64 {
+    numeric_stable_divide(bin_c, pop_size)
 }
 
 /// Population Stability Index. Measures how much a distribution has shifted relative to a
@@ -232,15 +237,13 @@ pub(crate) fn compute_psi(
 ) -> f64 {
     // validate that rt and baseline bins are of same length
     debug_assert_eq!(runtime_bins.len(), baseline_hist.len());
-    let bl_recip = 1_f64 / bl_n;
-    let rt_recip = 1_f64 / rt_n;
 
     baseline_hist
         .iter()
         .zip(runtime_bins.iter())
         .map(|(bl, rt)| {
-            let b = stable_apply_ratio(*bl, bl_recip);
-            let r = stable_apply_ratio(*rt, rt_recip);
+            let b = stable_apply_ratio(*bl, bl_n);
+            let r = stable_apply_ratio(*rt, rt_n);
             (b - r) * (b / r).ln()
         })
         .sum()
@@ -263,15 +266,13 @@ pub(crate) fn compute_kl_divergence_drift(
 ) -> f64 {
     // validate that rt and baseline bins are of same length
     debug_assert_eq!(runtime_bins.len(), baseline_hist.len());
-    let bl_recip = 1_f64 / bl_n;
-    let rt_recip = 1_f64 / rt_n;
 
     baseline_hist
         .iter()
         .zip(runtime_bins.iter())
         .map(|(bl, rt)| {
-            let dist_bl = stable_apply_ratio(*bl, bl_recip);
-            let dist_rt = stable_apply_ratio(*rt, rt_recip);
+            let dist_bl = stable_apply_ratio(*bl, bl_n);
+            let dist_rt = stable_apply_ratio(*rt, rt_n);
             dist_bl * (dist_bl / dist_rt).max(STABILITY_EPS).ln()
         })
         .sum()
@@ -294,18 +295,13 @@ pub(crate) fn compute_jensen_shannon_divergence_drift(
 ) -> f64 {
     // validate that rt and baseline bins are of same length
     debug_assert_eq!(runtime_bins.len(), baseline_hist.len());
-
-    let bl_recip = 1_f64 / bl_n;
-    let rt_recip = 1_f64 / rt_n;
-    let half_fac = 0.5_f64;
-
     let js: f64 = baseline_hist
         .iter()
         .zip(runtime_bins.iter())
         .map(|(bl, rt)| {
-            let p = stable_apply_ratio(*bl, bl_recip);
-            let q = stable_apply_ratio(*rt, rt_recip);
-            let m = (p + q) * half_fac;
+            let p = stable_apply_ratio(*bl, bl_n);
+            let q = stable_apply_ratio(*rt, rt_n);
+            let m = (p + q) * HALF_CONSTANT;
 
             (HALF_CONSTANT * p * (p / m).ln()) + (HALF_CONSTANT * q * (q / m).ln())
         })
@@ -347,15 +343,12 @@ pub(crate) fn continuous_wasserstein_distance(
 #[inline]
 fn wasserstein_inner(baseline_hist: &[f64], bl_n: f64, runtime_bins: &[f64], rt_n: f64) -> f64 {
     debug_assert_eq!(runtime_bins.len(), baseline_hist.len());
-    let bl_recip = 1_f64 / bl_n;
-    let rt_recip = 1_f64 / rt_n;
-
     baseline_hist
         .iter()
         .zip(runtime_bins.iter())
         .map(|(bl, rt)| {
-            let p = stable_apply_ratio(*bl, bl_recip);
-            let q = stable_apply_ratio(*rt, rt_recip);
+            let p = stable_apply_ratio(*bl, bl_n);
+            let q = stable_apply_ratio(*rt, rt_n);
 
             (p - q).abs()
         })
@@ -389,8 +382,8 @@ pub(crate) fn categorical_wasserstein_distance(
 //  bin count is the number of examples resolved to the current bin
 //  total population is the number of examples in the entire population across the 2 groups
 #[inline]
-fn chi_sq_e(group_c: f64, bin_c: f64, total_pop_recip: f64) -> f64 {
-    (group_c * bin_c) * total_pop_recip
+fn chi_sq_e(group_c: f64, bin_c: f64, total_pop: f64) -> f64 {
+    numeric_stable_divide(group_c * bin_c, total_pop)
 }
 
 // Compute the chi squared value for a particular bin with the normalized and expected values.
@@ -416,15 +409,15 @@ fn chi_squared(
     n_rt_samples: f64,
 ) -> f64 {
     debug_assert_eq!(baseline_hist.len(), runtime_hist.len());
-    let total_samples_recip = 1_f64 / (n_bl_samples + n_rt_samples);
+    let total_samples = n_bl_samples + n_rt_samples;
 
     let chi_sq = baseline_hist
         .iter()
         .zip(runtime_hist.iter())
         .map(|(e, o)| {
             let bin_samples = e + o;
-            let e_bl = chi_sq_e(n_bl_samples, bin_samples, total_samples_recip);
-            let e_rt = chi_sq_e(n_rt_samples, bin_samples, total_samples_recip);
+            let e_bl = chi_sq_e(n_bl_samples, bin_samples, total_samples);
+            let e_rt = chi_sq_e(n_rt_samples, bin_samples, total_samples);
             chi_sq_bin_value(*e, *o, e_bl, e_rt)
         })
         .sum();
@@ -447,8 +440,6 @@ fn kolmogorov_smirnov(baseline_hist: &[f64], bl_n: f64, runtime_hist: &[f64], rt
     let mut ks = 0_f64;
     let mut rt_cum = 0_f64;
     let mut bl_cum = 0_f64;
-    let bl_recip = 1_f64 / bl_n;
-    let rt_recip = 1_f64 / rt_n;
 
     baseline_hist
         .iter()
@@ -456,8 +447,8 @@ fn kolmogorov_smirnov(baseline_hist: &[f64], bl_n: f64, runtime_hist: &[f64], rt
         .for_each(|(bl, rt)| {
             bl_cum += bl;
             rt_cum += rt;
-            let cdf_bl = bl_cum * bl_recip;
-            let cdf_rt = rt_cum * rt_recip;
+            let cdf_bl = stable_apply_ratio(bl_cum, bl_n);
+            let cdf_rt = stable_apply_ratio(rt_cum, rt_n);
             ks = (cdf_bl - cdf_rt).abs().max(ks);
         });
     ks
@@ -475,16 +466,12 @@ fn kolmogorov_smirnov(baseline_hist: &[f64], bl_n: f64, runtime_hist: &[f64], rt
 #[inline]
 fn hellinger(baseline_hist: &[f64], bl_n: f64, runtime_hist: &[f64], rt_n: f64) -> f64 {
     debug_assert_eq!(baseline_hist.len(), runtime_hist.len());
-
-    let bl_recip = 1_f64 / bl_n;
-    let rt_recip = 1_f64 / rt_n;
-
     let h_base: f64 = baseline_hist
         .iter()
         .zip(runtime_hist.iter())
         .map(|(bl, rt)| {
-            let p = (bl * bl_recip).sqrt();
-            let q = (rt * rt_recip).sqrt();
+            let p = stable_apply_ratio(*bl, bl_n).sqrt();
+            let q = stable_apply_ratio(*rt, rt_n).sqrt();
             (p - q).powi(2)
         })
         .sum();
@@ -512,15 +499,15 @@ fn g_test_elementwise(e: f64, norm_e: f64, o: f64, norm_o: f64) -> f64 {
 fn g_test(baseline_hist: &[f64], bl_n: f64, runtime_hist: &[f64], rt_n: f64) -> f64 {
     debug_assert_eq!(baseline_hist.len(), runtime_hist.len());
 
-    let total_samples_recip = 1_f64 / (bl_n + rt_n);
+    let total_samples = bl_n + rt_n;
 
     let g_test_base: f64 = baseline_hist
         .iter()
         .zip(runtime_hist.iter())
         .map(|(e, o)| {
             let bin_samples = e + o;
-            let e_normalized = chi_sq_e(bl_n, bin_samples, total_samples_recip);
-            let o_normalized = chi_sq_e(rt_n, bin_samples, total_samples_recip);
+            let e_normalized = chi_sq_e(bl_n, bin_samples, total_samples);
+            let o_normalized = chi_sq_e(rt_n, bin_samples, total_samples);
             g_test_elementwise(*e, e_normalized, *o, o_normalized)
         })
         .sum();

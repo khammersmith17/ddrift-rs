@@ -3,11 +3,14 @@ use crate::baseline::table::BaselineTable;
 use ahash::HashMap;
 use arrow::record_batch::RecordBatch;
 
-pub(crate) fn validate_schema(
-    baseline_schema: &SchemaView,
-    candidate_schema: &SchemaView,
-) -> SchemaValidationResult {
-    baseline_schema.validate(candidate_schema)
+pub(crate) fn validate_schema<'a, L, R>(left: &'a L, right: &'a R) -> SchemaValidationResult
+where
+    SchemaView<'a>: From<&'a L>,
+    SchemaView<'a>: From<&'a R>,
+{
+    let left_schema = SchemaView::from(left);
+    let right_schema = SchemaView::from(right);
+    left_schema.validate(&right_schema)
 }
 
 #[derive(Debug)]
