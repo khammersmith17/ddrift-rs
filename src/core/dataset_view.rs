@@ -30,6 +30,7 @@ pub mod total {
     }
 
     impl<'a> ComputationView<'a> {
+        #[allow(unused)]
         pub(crate) fn new<B: DriftActor<'a>, C: DriftActor<'a>>(
             baseline: &'a B,
             candidate: &'a C,
@@ -53,6 +54,7 @@ pub mod total {
             }
         }
 
+        #[allow(unused)]
         pub(crate) fn new_from_parts(
             baseline: DriftActorComponents<'a>,
             candidate: DriftActorComponents<'a>,
@@ -82,6 +84,7 @@ pub mod total {
         candidate_bins: &'a [f64],
         baseline_count: f64,
         candidate_count: f64,
+        #[allow(unused)]
         pub(crate) baseline_null_count: f64,
         pub(crate) candidate_null_count: f64,
     }
@@ -105,6 +108,7 @@ pub mod total {
     }
 
     impl<'a> NullableComputationView<'a> {
+        #[allow(unused)]
         pub(crate) fn new<B: NullableDriftActor<'a>, C: NullableDriftActor<'a>>(
             baseline: &'a B,
             candidate: &'a C,

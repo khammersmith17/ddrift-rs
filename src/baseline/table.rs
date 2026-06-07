@@ -4,7 +4,12 @@ use super::{
 use crate::{
     core::{distribution::QuantileType, error::DriftTableError},
     drift::{NullDriftActorComponents, NullableDriftActor},
-    table::{ColumnTypeClass, datatypes::DriftDataType},
+    table::{
+        ColumnTypeClass,
+        candidate::CandidateTable,
+        candidate_drift::{TableDrift, compute_table_drift},
+        datatypes::DriftDataType,
+    },
 };
 use ahash::{HashMap, HashMapExt};
 use arrow::{
@@ -47,6 +52,7 @@ impl BaselineContainer {
         }
     }
 
+    #[allow(unused)]
     fn type_class(&self) -> ColumnTypeClass {
         if matches!(self, Self::FloatingPoint32(_) | Self::FloatingPoint64(_)) {
             ColumnTypeClass::Continuous
@@ -177,6 +183,7 @@ impl BaselineColumn {
         self.container.computation_view()
     }
 
+    #[allow(unused)]
     pub(crate) fn type_class(&self) -> ColumnTypeClass {
         self.container.type_class()
     }
@@ -219,5 +226,12 @@ impl BaselineTable {
 
     pub(crate) fn len(&self) -> usize {
         self.table.len()
+    }
+
+    pub fn compute_candidate_drift<'a>(
+        &'a self,
+        candidate: &'a CandidateTable,
+    ) -> Result<TableDrift, DriftTableError> {
+        compute_table_drift(self, candidate)
     }
 }

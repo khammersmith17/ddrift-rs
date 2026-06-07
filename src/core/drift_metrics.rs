@@ -449,7 +449,7 @@ fn kolmogorov_smirnov(baseline_hist: &[f64], bl_n: f64, runtime_hist: &[f64], rt
             rt_cum += rt;
             let cdf_bl = stable_apply_ratio(bl_cum, bl_n);
             let cdf_rt = stable_apply_ratio(rt_cum, rt_n);
-            ks = (cdf_bl - cdf_rt).abs().max(ks);
+            ks = ks.max((cdf_bl - cdf_rt).abs());
         });
     ks
 }

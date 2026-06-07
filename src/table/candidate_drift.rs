@@ -39,7 +39,8 @@ pub fn compute_table_drift(
 
     let mut result: TableDrift = HashMap::with_capacity(baseline_table.len());
     for (column, baseline_state) in baseline_table.iter() {
-        // SAFETY: At this point we know schema is valid.
+        // SAFETY: At this point we know schema is valid and there is parity between the baseline
+        // and candidate dataset.
         result.insert(
             column.to_string(),
             compute_column_drift(baseline_state, candidate_table.get_column(column).unwrap()),
