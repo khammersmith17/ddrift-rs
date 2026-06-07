@@ -194,7 +194,7 @@ pub struct BaselineTable {
 }
 
 impl BaselineTable {
-    pub fn from_record_batch(
+    pub fn from_arrow_record_batch(
         batch: &RecordBatch,
         quantile_types_opt: Option<&HashMap<String, QuantileType>>,
     ) -> Result<BaselineTable, DriftTableError> {

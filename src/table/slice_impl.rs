@@ -1,6 +1,11 @@
+use arrow::array::Array;
 use std::ops::Range;
 use std::vec::IntoIter;
 
+/// This trait allows for a slice like representation of arrow like String storage representations,
+/// where all strings are stored in a contiguous u8 buffer and offsets of the strings are stored
+/// along side. This allows for distributed computation by abstracting out the logic that provides
+/// a typed refernece to the chunk within the larger slab.
 pub trait SliceImpl<T> {
     fn get(&self, i: usize) -> Option<T>;
     fn len(&self) -> usize;
@@ -27,21 +32,37 @@ pub trait SliceImpl<T> {
     }
 }
 
-/// Type to implement an alternative string view that allows for parallel chunking.
+/// Type to implement an alternative string view that allows for parallel chunking. Abstracts the
+/// underlying representation of something like `[arrow::array::StringArray]` into a slice like
+/// view, allowing for
 pub struct StringSlice32<'a> {
     buffer: &'a [u8],
     offsets: &'a [i32],
+    null_buffer: Option<&'a arrow::buffer::NullBuffer>,
 }
 
 impl<'a> StringSlice32<'a> {
     pub(crate) fn from_array(array: &'a arrow::array::StringArray) -> StringSlice32<'a> {
         let buffer = array.values().as_slice();
         let offsets = array.value_offsets();
-        StringSlice32 { buffer, offsets }
+        let null_buffer = array.nulls();
+        StringSlice32 {
+            buffer,
+            offsets,
+            null_buffer,
+        }
     }
 
     fn offset_len(&self) -> usize {
         self.offsets.len()
+    }
+
+    fn is_null(&self, i: usize) -> bool {
+        if let Some(buffer) = self.null_buffer {
+            buffer.is_null(i)
+        } else {
+            false
+        }
     }
 }
 
@@ -49,9 +70,10 @@ impl<'a> SliceImpl<&'a str> for StringSlice32<'a> {
     fn len(&self) -> usize {
         self.offset_len() - 1_usize
     }
+
     fn get(&self, i: usize) -> Option<&'a str> {
         let offset_len = self.offset_len();
-        if i + 1 >= offset_len {
+        if i + 1 >= offset_len || self.is_null(i) {
             return None;
         }
 
@@ -93,13 +115,27 @@ impl<'a> SliceImpl<bool> for BooleanSlice<'a> {
 pub struct StringSlice64<'a> {
     buffer: &'a [u8],
     offsets: &'a [i64],
+    null_buffer: Option<&'a arrow::buffer::NullBuffer>,
 }
 
 impl<'a> StringSlice64<'a> {
     pub(crate) fn from_array(array: &'a arrow::array::LargeStringArray) -> StringSlice64<'a> {
         let buffer = array.values().as_slice();
         let offsets = array.value_offsets();
-        StringSlice64 { buffer, offsets }
+        let null_buffer = array.nulls();
+        StringSlice64 {
+            buffer,
+            offsets,
+            null_buffer,
+        }
+    }
+
+    fn is_null(&self, i: usize) -> bool {
+        if let Some(buffer) = self.null_buffer {
+            buffer.is_null(i)
+        } else {
+            false
+        }
     }
 
     fn offset_len(&self) -> usize {
@@ -113,7 +149,7 @@ impl<'a> SliceImpl<&'a str> for StringSlice64<'a> {
     }
     fn get(&self, i: usize) -> Option<&'a str> {
         let offset_len = self.offset_len();
-        if i + 1 >= offset_len {
+        if i + 1 >= offset_len || self.is_null(i) {
             return None;
         }
 
