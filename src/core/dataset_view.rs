@@ -391,6 +391,20 @@ pub mod candidate {
 
     #[cfg(feature = "arrow")]
     impl<'a, T: Float + Send + Sync> NullableContinuousCandidateView<'a, T> {
+        pub fn empty_from_edges(
+            bin_edges: &'a ContinuousBinEdges<T>,
+        ) -> NullableContinuousCandidateView<'a, T> {
+            let quantile_bins = vec![0_f64; bin_edges.n_bins()];
+            let size = 0_usize;
+            let null_count = 0_usize;
+
+            NullableContinuousCandidateView {
+                bin_edges,
+                quantile_bins,
+                size,
+                null_count,
+            }
+        }
         pub fn arrow_from_bin_edges(
             dataset: &[T],
             bin_edges: &'a ContinuousBinEdges<T>,
@@ -532,6 +546,21 @@ pub mod candidate {
 
     #[cfg(feature = "arrow")]
     impl<'a, T: Hash + Ord + Clone + Send + Sync> NullableCategoricalCandidateView<'a, T> {
+        pub fn empty_from_edges(
+            bin_edges: &'a CategoricalBinEdges<T>,
+        ) -> NullableCategoricalCandidateView<'a, T> {
+            let quantile_bins = vec![0_f64; bin_edges.n_bins()];
+            let size = 0_usize;
+            let null_count = 0_usize;
+
+            NullableCategoricalCandidateView {
+                bin_edges,
+                quantile_bins,
+                size,
+                null_count,
+            }
+        }
+
         pub fn arrow_from_bin_edges(
             dataset: &[T],
             bin_edges: &'a CategoricalBinEdges<T>,

@@ -1,4 +1,4 @@
-use arrow::array::Array;
+use arrow::array::{Array, BooleanArray, LargeStringArray, StringArray};
 use std::ops::Range;
 use std::vec::IntoIter;
 
@@ -6,6 +6,9 @@ use std::vec::IntoIter;
 /// where all strings are stored in a contiguous u8 buffer and offsets of the strings are stored
 /// along side. This allows for distributed computation by abstracting out the logic that provides
 /// a typed refernece to the chunk within the larger slab.
+///
+/// The advantage here is that using the iterator abstraction on [arrow::array::Array] is not
+/// longer required, so dataset approximation can be done in parallel and a simple interface.
 pub trait SliceImpl<T> {
     fn get(&self, i: usize) -> Option<T>;
     fn len(&self) -> usize;
@@ -33,7 +36,7 @@ pub trait SliceImpl<T> {
 }
 
 /// Type to implement an alternative string view that allows for parallel chunking. Abstracts the
-/// underlying representation of something like `[arrow::array::StringArray]` into a slice like
+/// underlying representation of something like [arrow::array::StringArray] into a slice like
 /// view, allowing for
 pub struct StringSlice32<'a> {
     buffer: &'a [u8],
@@ -42,7 +45,7 @@ pub struct StringSlice32<'a> {
 }
 
 impl<'a> StringSlice32<'a> {
-    pub(crate) fn from_array(array: &'a arrow::array::StringArray) -> StringSlice32<'a> {
+    pub(crate) fn from_array(array: &'a StringArray) -> StringSlice32<'a> {
         let buffer = array.values().as_slice();
         let offsets = array.value_offsets();
         let null_buffer = array.nulls();
@@ -91,7 +94,7 @@ pub struct BooleanSlice<'a> {
 }
 
 impl<'a> BooleanSlice<'a> {
-    pub(crate) fn from_array(array: &'a arrow::array::BooleanArray) -> BooleanSlice<'a> {
+    pub(crate) fn from_array(array: &'a BooleanArray) -> BooleanSlice<'a> {
         BooleanSlice {
             buffer: array.values(),
         }
@@ -112,6 +115,9 @@ impl<'a> SliceImpl<bool> for BooleanSlice<'a> {
     }
 }
 
+/// Type to implement an alternative string view that allows for parallel chunking. Abstracts the
+/// underlying representation of something like [arrow::array::LargeStringArray] into a slice like
+/// view, allowing for
 pub struct StringSlice64<'a> {
     buffer: &'a [u8],
     offsets: &'a [i64],
@@ -119,7 +125,7 @@ pub struct StringSlice64<'a> {
 }
 
 impl<'a> StringSlice64<'a> {
-    pub(crate) fn from_array(array: &'a arrow::array::LargeStringArray) -> StringSlice64<'a> {
+    pub(crate) fn from_array(array: &'a LargeStringArray) -> StringSlice64<'a> {
         let buffer = array.values().as_slice();
         let offsets = array.value_offsets();
         let null_buffer = array.nulls();

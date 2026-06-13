@@ -131,6 +131,78 @@ pub struct CandidateColumn<'a> {
 }
 
 impl<'a> CandidateColumn<'a> {
+    pub(super) fn new_empty_from_baseline(baseline: &'a BaselineColumn) -> CandidateColumn<'a> {
+        let &BaselineColumn {
+            datatype: ref baseline_type,
+            container: ref baseline_container,
+        } = baseline;
+        let container = match baseline_container {
+            BaselineContainer::FloatingPoint32(bl_bins) => {
+                let &NullableBaselineContinuousBins { ref bin_edges, .. } = bl_bins;
+                let inner = NullableContinuousCandidateView::empty_from_edges(bin_edges);
+                CandidateContainer::FloatingPoint32(inner)
+            }
+            BaselineContainer::FloatingPoint64(bl_bins) => {
+                let &NullableBaselineContinuousBins { ref bin_edges, .. } = bl_bins;
+                let inner = NullableContinuousCandidateView::empty_from_edges(bin_edges);
+                CandidateContainer::FloatingPoint64(inner)
+            }
+            BaselineContainer::Integer8(bl_bins) => {
+                let &NullableBaselineCategoricalBins { ref bin_edges, .. } = bl_bins;
+                let inner = NullableCategoricalCandidateView::empty_from_edges(bin_edges);
+                CandidateContainer::Integer8(inner)
+            }
+            BaselineContainer::Integer16(bl_bins) => {
+                let &NullableBaselineCategoricalBins { ref bin_edges, .. } = bl_bins;
+                let inner = NullableCategoricalCandidateView::empty_from_edges(bin_edges);
+                CandidateContainer::Integer16(inner)
+            }
+            BaselineContainer::Integer32(bl_bins) => {
+                let &NullableBaselineCategoricalBins { ref bin_edges, .. } = bl_bins;
+                let inner = NullableCategoricalCandidateView::empty_from_edges(bin_edges);
+                CandidateContainer::Integer32(inner)
+            }
+            BaselineContainer::Integer64(bl_bins) => {
+                let &NullableBaselineCategoricalBins { ref bin_edges, .. } = bl_bins;
+                let inner = NullableCategoricalCandidateView::empty_from_edges(bin_edges);
+                CandidateContainer::Integer64(inner)
+            }
+            BaselineContainer::UnsignedInteger8(bl_bins) => {
+                let &NullableBaselineCategoricalBins { ref bin_edges, .. } = bl_bins;
+                let inner = NullableCategoricalCandidateView::empty_from_edges(bin_edges);
+                CandidateContainer::UnsignedInteger8(inner)
+            }
+            BaselineContainer::UnsignedInteger16(bl_bins) => {
+                let &NullableBaselineCategoricalBins { ref bin_edges, .. } = bl_bins;
+                let inner = NullableCategoricalCandidateView::empty_from_edges(bin_edges);
+                CandidateContainer::UnsignedInteger16(inner)
+            }
+            BaselineContainer::UnsignedInteger32(bl_bins) => {
+                let &NullableBaselineCategoricalBins { ref bin_edges, .. } = bl_bins;
+                let inner = NullableCategoricalCandidateView::empty_from_edges(bin_edges);
+                CandidateContainer::UnsignedInteger32(inner)
+            }
+            BaselineContainer::UnsignedInteger64(bl_bins) => {
+                let &NullableBaselineCategoricalBins { ref bin_edges, .. } = bl_bins;
+                let inner = NullableCategoricalCandidateView::empty_from_edges(bin_edges);
+                CandidateContainer::UnsignedInteger64(inner)
+            }
+            BaselineContainer::String(bl_bins) => {
+                let &NullableBaselineCategoricalBins { ref bin_edges, .. } = bl_bins;
+                let inner = NullableCategoricalCandidateView::empty_from_edges(bin_edges);
+                CandidateContainer::String(inner)
+            }
+            BaselineContainer::Boolean(bl_bins) => {
+                let &NullableBaselineCategoricalBins { ref bin_edges, .. } = bl_bins;
+                let inner = NullableCategoricalCandidateView::empty_from_edges(bin_edges);
+                CandidateContainer::Boolean(inner)
+            }
+        };
+        CandidateColumn {
+            datatype: *baseline_type,
+            container,
+        }
+    }
     // Caller must guarantee schema parity between baseline and array before calling this.
     pub(super) fn from_baseline_and_array(
         baseline: &'a BaselineColumn,
@@ -408,6 +480,18 @@ pub struct CandidateTable<'a> {
 * */
 
 impl<'a> CandidateTable<'a> {
+    pub fn new_from_baseline_schema(baseline_table: &'a BaselineTable) -> CandidateTable<'a> {
+        let mut table = HashMap::with_capacity(baseline_table.len());
+        for (name, column) in baseline_table.iter() {
+            table.insert(
+                name.clone(),
+                CandidateColumn::new_empty_from_baseline(column),
+            );
+        }
+
+        CandidateTable { table }
+    }
+
     pub fn from_arrow_record_batch(
         baseline_table: &'a BaselineTable,
         record_batch: Arc<RecordBatch>,
@@ -434,7 +518,7 @@ impl<'a> CandidateTable<'a> {
         &mut self,
         record_batch: Arc<RecordBatch>,
     ) -> Result<(), DriftTableError> {
-        // Get a temporary exclusive reference.
+        // Get a temporary exclusive reference from the mut reference.
         if let SchemaValidationResult::Invalid(diff) =
             validate_schema(&(*self), record_batch.as_ref())
         {

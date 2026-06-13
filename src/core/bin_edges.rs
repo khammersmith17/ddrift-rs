@@ -10,7 +10,7 @@ pub struct ContinuousBinEdges<T: Float> {
 
 impl<T: Float> ContinuousBinEdges<T> {
     pub fn new_from_parts(bin_edges: Vec<T>) -> ContinuousBinEdges<T> {
-        let n_bins = bin_edges.len() + 2;
+        let n_bins = bin_edges.len() + 1;
         ContinuousBinEdges { bin_edges, n_bins }
     }
     /// Assumes data is sorted.
